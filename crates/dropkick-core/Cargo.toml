@@ -1,0 +1,9 @@
+[package]
+name = "dropkick-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# No dependencies. This is not an accident, and additions get scrutiny.
+[dependencies]

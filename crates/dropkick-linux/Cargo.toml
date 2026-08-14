@@ -1,0 +1,22 @@
+[package]
+name = "dropkick-linux"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+dropkick-core = { path = "../dropkick-core" }
+smithay-client-toolkit = "0.21"
+
+[lib]
+name = "dropkick_linux"
+path = "src/lib.rs"
+
+[[bin]]
+name = "dropkickd"
+path = "src/main.rs"
+
+[[bin]]
+name = "dropkickctl"
+path = "src/bin/dropkickctl.rs"
