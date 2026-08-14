@@ -142,6 +142,35 @@ Then:
 cargo build --release
 ```
 
+## Binding a key
+
+Dropkick cannot register a global hotkey itself. This is not laziness: the
+Wayland compositor owns global shortcuts, and on this system
+`org.freedesktop.portal.GlobalShortcuts` does not exist at all. So the binding
+lives in COSMIC and runs `dropkickctl`, which pokes the daemon over a Unix
+socket in about a millisecond.
+
+Create `~/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom`:
+
+```
+{
+    (modifiers: [Super], key: "d"): Spawn("/path/to/dropkickctl toggle"),
+}
+```
+
+Bind to the binary directly. Going through `sh -c` would cost more than
+everything `dropkickctl` does.
+
+**`Super+Space` is already taken** — COSMIC's defaults bind it to
+`System(InputSourceSwitch)`. A custom binding should override it, and if you
+have a single keyboard layout you lose nothing, but a chord COSMIC has not
+claimed is the safer choice. As of COSMIC on Pop!\_OS 24.04, the free
+single-letter Super chords are `c d e n p v z`.
+
+You do not need an autostart entry. If no daemon is running, `dropkickctl`
+starts one and retries, so the first press of the session costs ~25ms and every
+press after that is ~1ms.
+
 ## Keys
 
 Tools, by permanent key:
