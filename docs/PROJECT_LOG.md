@@ -35,6 +35,64 @@ featural. Unrelated to the trading projects ([[opm-project]], [[carmen-project]]
 - **No SQLite, no ORM, no async runtime, no logging framework** until something
   actually demands one. Dependency tree today: 53 crates, none network-capable.
 
+## UI MODEL — LOCKED (user, 2026-08-13)
+
+Dropkick has no root menu and no launcher screen. **It opens into whatever tool
+was last used, with that tool's values intact.** Tools are shown as tabs across
+the top; switching is a single chord. This is nearly free given the resident
+daemon: "last tool with last values" is just not clearing memory. No persistence
+layer, no serialisation, no disk.
+
+This supersedes the earlier open question about modal-vs-type-ahead root
+grammar. That question only existed because a root menu was assumed. With
+resume, the common case carries **zero ceremony keystrokes** —
+`Super+Space 437*1.18` goes straight into the calculator because that is where
+you left it. The tool-switch key becomes a rare keystroke rather than a
+per-invocation tax, which changes what it must optimise for: unambiguity over
+speed.
+
+**Tool switching is Alt+Q/W/E/R…, not Shift+Q/W/E/R.**
+
+The user's first instinct was Shift. Shift+Q is not a free keystroke — it is the
+letter `Q`. Harmless in the calculator (no letters accepted), fatal in Notepad,
+where "Quick note…" would be eaten by the tab bar. The collision lands precisely
+on the tool where text entry is the whole point. Modality could patch it (Shift+Q
+switches only in command mode) but then the switch key behaves differently
+depending on tool and mode, which is exactly what muscle memory cannot absorb.
+Alt+letter is never text, in any tool, in any mode. Ctrl was rejected: Ctrl+W and
+Ctrl+E already mean delete-word and end-of-line to anyone with readline habits.
+Super was rejected: COSMIC has claimed much of it, including the summon key.
+
+**Q/W/E/R is kept** despite being one row above strict home position, because the
+top row of keys maps left-to-right onto the tabs at the top of the screen. That
+spatial correspondence is why it will stick.
+
+Rules that are cheap now and expensive later:
+
+- **Keys bind to tools, never to tab positions.** If Alt+Q means "first tab",
+  inserting a tool later shifts every binding and destroys months of muscle
+  memory in one release. Each tool gets a permanent key; tab order follows key
+  order; new tools take T, Y, U…; a retired tool's key stays retired.
+- **Esc is strictly "up one level"** — insert mode → command mode → dismiss —
+  and **double-Esc always dismisses from anywhere**. Esc will be the most-pressed
+  key in the product. If it sometimes dismisses and sometimes does not, the user
+  must look at the screen before pressing it, which defeats the entire design.
+- **Resume-safety is declared per tool.** This collides with the "design it as
+  though it contains passwords" rule: if clipboard history was the last tool
+  used, `Super+Space` renders the clipboard on screen instantly, in a meeting or
+  in front of whoever is behind you. The calculator auto-resumes revealed; the
+  clipboard resumes to the tool with entries **masked until a key is pressed**.
+- **Switching tools preserves the other tools' state.** Alt+W then Alt+Q returns
+  to the calculator with the expression still there.
+
+Consequence of the measured latency (see finding 7): keyboard focus lands ~11 ms
+before the first frame is presented, so **the user can type into a tool before
+seeing which tool it is**. Harmless in the calculator, a mutation in Notepad.
+Two mitigations, both adopted: (a) undo in any tool a stray keystroke can mutate;
+(b) the summon may name a target — `dropkickctl show notes` bound to its own key
+— to bypass resume when the user already knows where they are going. Still a
+write-only verb that moves a window, so the socket's authority does not widen.
+
 ## MEASURED PLATFORM FINDINGS (2026-08-13, this machine)
 
 Pop!_OS 24.04, Wayland, `cosmic-comp`. All measured, none assumed.
@@ -111,10 +169,15 @@ verb reads clipboard history back out, and none may ever be added.
 
 ## OPEN QUESTIONS
 
-- Root interaction grammar: strict vi-modal (`c` = calculator) vs type-ahead
-  with sigils (bare digits → calculator). The plan's own example,
-  `Super+Space c 437*1.18`, has a ceremonial `c`. Decide before the second
-  utility exists.
+- ~~Root interaction grammar~~ — RESOLVED 2026-08-13, see UI MODEL above.
+- Which tool owns which permanent key, beyond the first four (Calculator,
+  Calendar, Notepad, ColorPicker ⇒ Alt+Q/W/E/R). Cheap to decide, impossible to
+  change later.
+- In-tool keymaps are unspecified. They are free-form: tool switching lives on a
+  modifier, so no in-tool binding can collide with it.
+- Does resume survive a daemon restart or reboot, or only sleep between
+  summons? In-memory resume is free; on-disk resume is a per-tool retention
+  decision and interacts with the clipboard retention tiers.
 - Password-manager hint (`x-kde-passwordManagerHint: secret`) skip policy is
   designed but **untested** — needs a real password-manager copy to confirm.
 - Accessibility: custom-drawn toolkits (Iced/libcosmic) have limited AT-SPI
@@ -124,6 +187,12 @@ verb reads clipboard history back out, and none may ever be added.
 
 ## NEXT
 
-Interaction grammar decision, then the first utility (calculator) end-to-end to
-prove the grammar before four more are built on it. Clipboard history last: it
-is the security-heavy one and benefits from everything else being settled.
+The interaction grammar is settled, so: the tab bar plus two tools, far enough
+to exercise the parts that are hard to retrofit — Alt-switching between them,
+state preserved on both sides of the switch, the Esc ladder, and undo. Calculator
+and Notepad are the right pair, because Notepad is the tool that disqualified
+Shift and will stress the mode boundary.
+
+Clipboard history stays last. It is the security-heavy one, it is the tool that
+needs masked resume, and it benefits from every other decision being settled
+first.

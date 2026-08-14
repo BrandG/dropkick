@@ -15,6 +15,23 @@ Pre-alpha. Nothing usable yet. What exists today is a latency probe that
 establishes whether the interaction model is achievable on this platform before
 any utility gets written. It is.
 
+## How it behaves
+
+There is no launcher screen and no root menu. Dropkick opens into whatever tool
+you used last, with your values still in it, and the tools sit as tabs across the
+top. So the common case costs nothing:
+
+```
+Super+Space 437*1.18        you were already in the calculator
+```
+
+Switching tools is `Alt+Q`, `Alt+W`, `Alt+E`… — the top key row maps
+left-to-right onto the tabs. `Alt`, not `Shift`, because `Shift+Q` is the letter
+`Q` and would be swallowed by the tab bar the moment you started a note with it.
+
+`Esc` always means "up one level": leave insert mode, leave the tool, dismiss.
+Double-`Esc` dismisses from anywhere.
+
 ## The rules
 
 * **Offline only.** Not "works offline". There is no network. Dropkick does not
