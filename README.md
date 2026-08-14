@@ -11,9 +11,13 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. Nothing usable yet. What exists today is a latency probe that
-establishes whether the interaction model is achievable on this platform before
-any utility gets written. It is.
+Pre-alpha. The tab bar works, with two of four tools built: Calculator and
+Notepad. Calendar and ColorPicker show as dimmed tabs holding their permanent
+keys, so nothing renumbers when they arrive.
+
+![Calculator](docs/img/calculator.png)
+
+![Notepad](docs/img/notepad.png)
 
 ## How it behaves
 
@@ -138,6 +142,26 @@ Then:
 cargo build --release
 ```
 
+## Keys
+
+Tools, by permanent key:
+
+| key | tool | |
+|---|---|---|
+| `Alt+Q` | Calculator | built |
+| `Alt+W` | Calendar | not built |
+| `Alt+E` | Notepad | built |
+| `Alt+R` | ColorPicker | not built |
+
+Calculator takes a plain expression: `+ - * / % ^`, parentheses, `sqrt abs ln
+log sin cos tan round floor ceil`, the constants `pi` and `e`, and `ans` for the
+previous result. `Enter` evaluates.
+
+Notepad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
+mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes. Undo is
+per *burst*, not per character, so one `u` takes back a whole typing run — which
+is also what makes a keystroke that landed before you saw the panel recoverable.
+
 ## Trying the probe
 
 ```
@@ -150,6 +174,13 @@ above. To exercise the real path instead, run the daemon and poke it:
 ```
 ./target/release/dropkickd
 ./target/release/dropkickctl toggle --time
+```
+
+The UI can also be rendered without a compositor, which is how it gets reviewed
+without anyone having to describe a screenshot in prose:
+
+```
+./target/release/dropkickd --shot /tmp/dk
 ```
 
 ## Layout

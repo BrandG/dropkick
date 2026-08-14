@@ -25,6 +25,10 @@
 //! wait for a configure, then attach. So every summon costs one compositor
 //! round trip, and size/anchor/interactivity must be re-applied each time.
 
+use dropkick_core::app::{App, Response};
+use dropkick_core::key::{Key as DkKey, KeyPress, Mods};
+use dropkick_linux::font::{Canvas, TextRenderer};
+use dropkick_linux::render::{self, HEIGHT, WIDTH};
 use dropkick_linux::ipc;
 
 use std::num::NonZeroU32;
@@ -58,9 +62,6 @@ use smithay_client_toolkit::{
     },
     shm::{slot::SlotPool, Shm, ShmHandler},
 };
-
-const WIDTH: u32 = 520;
-const HEIGHT: u32 = 220;
 
 /// How long the panel stays up in bench mode before being dismissed.
 const VISIBLE_MS: u64 = 90;
@@ -117,6 +118,11 @@ struct Dropkick {
     cycle_id: u64,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     handle: LoopHandle<'static, Dropkick>,
+
+    app: App,
+    text: TextRenderer,
+    mods: Mods,
+    started: Instant,
 
     width: u32,
     height: u32,
@@ -229,16 +235,13 @@ impl Dropkick {
     fn draw(&mut self, qh: &QueueHandle<Self>) {
         let (width, height) = (self.width, self.height);
         let stride = width as i32 * 4;
-        let (buffer, canvas) = self
+        let (buffer, pixels) = self
             .pool
             .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
             .expect("create buffer");
 
-        // Flat fill. Anything prettier would be measuring the painter, not the
-        // compositor.
-        canvas.chunks_exact_mut(4).for_each(|chunk| {
-            chunk.copy_from_slice(&0xFF10_1418u32.to_le_bytes());
-        });
+        let mut canvas = Canvas { buf: pixels, w: width as i32, h: height as i32 };
+        render::draw(&self.app, &mut self.text, &mut canvas);
 
         let Some(layer) = self.layer.as_ref() else { return };
         layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
@@ -277,6 +280,16 @@ impl Dropkick {
                 TimeoutAction::Drop
             },
         );
+    }
+
+    fn dispatch_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
+        let Some(press) = translate(&event, self.mods) else { return };
+        let now = self.started.elapsed().as_millis() as u64;
+        match self.app.on_key(press, now) {
+            Response::Redraw => self.draw(qh),
+            Response::Dismiss => self.hide(),
+            Response::Ignored => {}
+        }
     }
 
     fn finish(&mut self) {
@@ -339,9 +352,26 @@ fn main() {
             .unwrap_or(20)
     });
 
+    if let Some(i) = args.iter().position(|a| a == "--shot") {
+        let prefix = args.get(i + 1).cloned().unwrap_or_else(|| "dropkick".to_string());
+        if let Err(e) = shots(&prefix) {
+            eprintln!("dropkickd: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let strategy = match args.iter().position(|a| a == "--strategy").and_then(|i| args.get(i + 1)) {
         Some(v) if v == "remap" => Strategy::Remap,
         _ => Strategy::Recreate,
+    };
+
+    let text = match TextRenderer::new(16.0) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("dropkickd: {e}");
+            std::process::exit(1);
+        }
     };
 
     let conn = Connection::connect_to_env().expect("no Wayland compositor");
@@ -386,6 +416,10 @@ fn main() {
         cycle_id: 0,
         keyboard: None,
         handle: handle.clone(),
+        app: App::new(),
+        text,
+        mods: Mods::default(),
+        started: Instant::now(),
         width: WIDTH,
         height: HEIGHT,
         phase: Phase::Hidden,
@@ -441,6 +475,112 @@ fn main() {
         summarise(&state.done);
     }
     let _ = std::fs::remove_file(ipc::socket_path());
+}
+
+/// Wayland keysyms -> Dropkick's platform-independent key model. The tools
+/// never see a keysym; this is the only place that knows what one is.
+fn translate(event: &KeyEvent, mods: Mods) -> Option<KeyPress> {
+    let key = match event.keysym {
+        Keysym::Escape => DkKey::Escape,
+        Keysym::Return | Keysym::KP_Enter => DkKey::Enter,
+        Keysym::BackSpace => DkKey::Backspace,
+        Keysym::Delete => DkKey::Delete,
+        Keysym::Tab => DkKey::Tab,
+        Keysym::Left => DkKey::Left,
+        Keysym::Right => DkKey::Right,
+        Keysym::Up => DkKey::Up,
+        Keysym::Down => DkKey::Down,
+        Keysym::Home => DkKey::Home,
+        Keysym::End => DkKey::End,
+        _ => {
+            // Alt suppresses the utf8 interpretation on most layouts, so fall
+            // back to the keysym's own character. That fallback is what makes
+            // Alt+Q work while Q still types a Q.
+            let c = event
+                .utf8
+                .as_ref()
+                .and_then(|s| s.chars().next())
+                .filter(|c| !c.is_control())
+                .or_else(|| event.keysym.key_char())?;
+            DkKey::Char(c)
+        }
+    };
+    Some(KeyPress { key, mods })
+}
+
+/// Render frames to PPM without a compositor, so the UI can be inspected in
+/// review and in CI rather than only by looking at a running desktop.
+fn shots(prefix: &str) -> std::io::Result<()> {
+    let mut text = match TextRenderer::new(16.0) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("dropkickd: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    type Frame = (&'static str, Box<dyn Fn(&mut App)>);
+    let frames: Vec<Frame> = vec![
+        (
+            "calculator",
+            Box::new(|app: &mut App| {
+                for (expr, enter) in [("437*1.18", true), ("sqrt(2)*3", true), ("453/17", false)] {
+                    for c in expr.chars() {
+                        app.on_key(KeyPress::ch(c), 0);
+                    }
+                    if enter {
+                        app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                    }
+                }
+            }),
+        ),
+        (
+            "notepad-insert",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                for c in "call Frank re: staging server".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                for c in "don't forget migration 37".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
+            "notepad-command",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                for c in "Quick note: Shift+Q types a Q".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Escape), 0);
+                for _ in 0..8 {
+                    app.on_key(KeyPress::ch('h'), 0);
+                }
+            }),
+        ),
+        (
+            "unbuilt-tab",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('w'), 0);
+            }),
+        ),
+    ];
+
+    for (name, setup) in frames {
+        let mut app = App::new();
+        setup(&mut app);
+        let mut buf = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
+        let mut canvas = Canvas { buf: &mut buf, w: WIDTH as i32, h: HEIGHT as i32 };
+        render::draw(&app, &mut text, &mut canvas);
+        let path = format!("{prefix}-{name}.ppm");
+        std::fs::write(&path, canvas.to_ppm())?;
+        println!("wrote {path}");
+    }
+    Ok(())
 }
 
 impl CompositorHandler for Dropkick {
@@ -559,24 +699,24 @@ impl KeyboardHandler for Dropkick {
     fn press_key(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
         event: KeyEvent,
     ) {
-        if event.keysym == Keysym::Escape {
-            self.hide();
-        }
+        self.dispatch_key(qh, event);
     }
 
+    /// Held keys repeat through the same path, so backspace and hjkl behave.
     fn repeat_key(
         &mut self,
         _: &Connection,
-        _: &QueueHandle<Self>,
+        qh: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: KeyEvent,
+        event: KeyEvent,
     ) {
+        self.dispatch_key(qh, event);
     }
 
     fn release_key(
@@ -595,10 +735,15 @@ impl KeyboardHandler for Dropkick {
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
         _: u32,
-        _: Modifiers,
+        modifiers: Modifiers,
         _: RawModifiers,
         _: u32,
     ) {
+        self.mods = Mods {
+            alt: modifiers.alt,
+            ctrl: modifiers.ctrl,
+            shift: modifiers.shift,
+        };
     }
 }
 

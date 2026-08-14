@@ -8,6 +8,7 @@ rust-version.workspace = true
 [dependencies]
 dropkick-core = { path = "../dropkick-core" }
 smithay-client-toolkit = "0.21"
+fontdue = "0.9"
 
 [lib]
 name = "dropkick_linux"

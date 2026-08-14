@@ -33,7 +33,8 @@ featural. Unrelated to the trading projects ([[opm-project]], [[carmen-project]]
   smithay-client-toolkit directly, since the first milestone is interaction
   latency, not widgets.
 - **No SQLite, no ORM, no async runtime, no logging framework** until something
-  actually demands one. Dependency tree today: 53 crates, none network-capable.
+  actually demands one. The dependency tree is audited on every change; the
+  current count is recorded in the BUILT sections below.
 
 ## UI MODEL — LOCKED (user, 2026-08-13)
 
@@ -184,6 +185,43 @@ verb reads clipboard history back out, and none may ever be added.
   support. A manifesto about respecting users should say so out loud.
 - Licence not yet chosen (workspace currently declares MIT).
 - On-disk format stability and data portability unspecified.
+
+## BUILT 2026-08-14 — tab bar, Calculator, Notepad
+
+`dropkick-core` now holds the whole interaction grammar and both tools, with 29
+unit tests and still **zero dependencies**. The platform crate provides only
+rendering and a keysym translator; the tools take a `KeyPress`, never a keysym,
+which is what makes the grammar testable without a compositor.
+
+- **Calculator** — recursive-descent evaluator: `+ - * / % ^` (right-associative
+  power), parentheses, unary minus, `sqrt abs ln log sin cos tan round floor
+  ceil`, `pi`/`e`, and `ans` for the previous result. Errors are reported and the
+  input is kept for repair rather than cleared.
+- **Notepad** — command/insert modes, `i a A o` `hjkl` `0 $` `x` `u`. **Undo is
+  per burst, not per keystroke**: a snapshot is taken when a mutation begins, so
+  one `u` reverses a whole typing run. That is what makes the stray-keystroke
+  problem (focus lands ~11 ms before paint) actually recoverable, and there is a
+  test named for exactly that case.
+- **Tab bar** — all four tools always visible; unbuilt ones dimmed and holding
+  their permanent keys. Pressing `Alt+W` says "Calendar isn't built yet" rather
+  than doing nothing, so the key never feels broken.
+- Tests pin the decisions themselves, not just the code: `Alt` switches tools
+  from inside insert mode; a typed capital `Q` stays text and never switches
+  tabs; switching preserves both tools' state; the Esc ladder climbs one level
+  per press and double-Esc dismisses from the deepest level.
+
+**Rendering costs nothing that matters.** Measured live with the real UI:
+`FOCUS` stayed at 0.45–0.55 ms, identical to the flat-fill probe, because
+painting happens *after* focus is granted. First paint rose to 3.03 ms on a cold
+glyph cache and settled at 0.92 ms once warm. The interaction budget is
+untouched.
+
+`dropkickd --shot <prefix>` renders frames to PPM with no compositor involved,
+driving the same `App` through synthetic key presses. The UI can therefore be
+reviewed as an image in CI or a code review rather than described in prose.
+
+One dependency added: `fontdue` (glyph rasterisation) in the platform crate
+only. Core stays at zero. Tree is 61 crates, none network-capable.
 
 ## NEXT
 

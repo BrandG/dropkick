@@ -5,13 +5,22 @@
 //!
 //! The rule is enforced mechanically, not by good intentions:
 //!   * `forbid(unsafe_code)` below,
+//!   * zero dependencies,
 //!   * a `deny.toml` at the workspace root that fails the build if any crate
 //!     capable of opening a socket enters the dependency tree.
 //!
-//! Deliberately near-empty for now. The first milestone is proving the
-//! interaction model, not writing a calculator.
+//! It is also why the interaction grammar is testable without a compositor: the
+//! tools take [`key::KeyPress`], not keysyms.
 
 #![forbid(unsafe_code)]
+
+pub mod app;
+pub mod calculator;
+pub mod key;
+pub mod notepad;
+
+pub use app::{App, Response, ToolId, TOOLS};
+pub use key::{Key, KeyPress, Mods};
 
 /// Version reported by `Help -> version`. Dropkick never checks this against a
 /// remote: there is nothing to check it against.
