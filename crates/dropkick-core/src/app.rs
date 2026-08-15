@@ -106,7 +106,7 @@ impl App {
             ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
                 crate::scratchpad::Mode::Insert => "INSERT   esc command mode",
-                crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  hjkl move  alt+h/l tabs  esc x",
+                crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  y copy all  hjkl move  esc x",
             },
             ToolId::Clipboard => {
                 if !self.clipboard.revealed {

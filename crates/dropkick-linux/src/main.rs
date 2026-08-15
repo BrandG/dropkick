@@ -429,6 +429,10 @@ impl Dropkick {
             source.offer(mime.to_string());
         }
         device.set_selection(Some(&source));
+        // Record it here rather than reading our own selection back: the
+        // self-capture guard suppresses that event, so without this a yank
+        // would reach the system clipboard but never appear in the history.
+        self.app.clipboard.record(&text, &[]);
         self.source_text = text;
         self.source = Some(source);
         self.skip_next_selection = true;
