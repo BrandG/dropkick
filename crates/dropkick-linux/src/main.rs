@@ -171,11 +171,18 @@ impl Dropkick {
         self.phase = Phase::Mapping;
 
         // A summon that never configures must report, not hang.
+        //
+        // "Stalled" means focus never arrived. It does NOT mean the cycle is
+        // still open: an open cycle is the normal state of a panel the user is
+        // currently typing into. Getting this wrong dismissed every working
+        // summon after 1.2s.
         let h = self.handle.clone();
         let _ = h.insert_source(
             Timer::from_duration(Duration::from_millis(1200)),
             move |_, _, state: &mut Dropkick| {
-                if state.cycle_id == id && state.cycle.is_some() {
+                let stalled = state.cycle_id == id
+                    && state.cycle.as_ref().is_some_and(|c| c.focused.is_none());
+                if stalled {
                     eprintln!("  [watchdog] summon {id} never completed (phase {:?})", state.phase);
                     state.hide();
                 }

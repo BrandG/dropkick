@@ -161,11 +161,12 @@ Create `~/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom`:
 Bind to the binary directly. Going through `sh -c` would cost more than
 everything `dropkickctl` does.
 
-**`Super+Space` is already taken** — COSMIC's defaults bind it to
-`System(InputSourceSwitch)`. A custom binding should override it, and if you
-have a single keyboard layout you lose nothing, but a chord COSMIC has not
-claimed is the safer choice. As of COSMIC on Pop!\_OS 24.04, the free
-single-letter Super chords are `c d e n p v z`.
+**Do not take `Super+Space`.** COSMIC's defaults bind it to
+`System(InputSourceSwitch)`. A custom binding does override it — verified — but
+a chord the desktop already defines is a bad neighbour, and it will confuse you
+on a machine where you really do run two keyboard layouts. As of COSMIC on
+Pop!\_OS 24.04 the free single-letter Super chords are `c d e n p v z`; the
+window manager owns the rest, and `Super` alone is the launcher.
 
 You do not need an autostart entry. If no daemon is running, `dropkickctl`
 starts one and retries, so the first press of the session costs ~25ms and every

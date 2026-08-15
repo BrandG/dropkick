@@ -223,6 +223,38 @@ reviewed as an image in CI or a code review rather than described in prose.
 One dependency added: `fontdue` (glyph rasterisation) in the platform crate
 only. Core stays at zero. Tree is 61 crates, none network-capable.
 
+## FIXED 2026-08-15 — panel dismissed itself after 1.2s
+
+First real interactive use found a bug the benchmarks could not: the panel
+appeared and closed again about a second later, untouched.
+
+Cause was the stall watchdog added alongside the `--strategy` work. It armed on
+every summon and treated "cycle still open" as "summon stalled" — but an open
+cycle is the *normal* state of a panel someone is typing into; it only closes on
+hide. So it dismissed every working summon at 1.2s. The log said as much once
+looked at directly: `[watchdog] summon 1 never completed (phase Visible)`
+alongside `FOCUS 0.74ms`, which is a completed summon by any reading.
+
+Now the watchdog checks whether focus ever arrived, which is what "stalled"
+actually means. Verified both directions: `--strategy remap` is still detected
+as stalling, `--strategy recreate` still benches clean, and an idle panel now
+stays up indefinitely.
+
+Worth noting as a pattern: bench mode hid this. Bench always hides after 90ms,
+so the 1.2s timer never had a chance to fire. A harness that drives itself
+faster than a person will not find bugs that only a person's pace exposes.
+
+**Keybinding decided (user, 2026-08-15): `Super+D`.** `Super+Space` is left to
+COSMIC's `System(InputSourceSwitch)`. A custom binding does override the default
+— tested, both worked — but the user's call was that a chord the desktop already
+defines should stay with the desktop. Free single-letter Super chords on COSMIC
+are `c d e n p v z`.
+
+Also fixed: `dropkickctl` now starts `dropkickd` on demand and retries for up to
+3s. A keybinding runs with no terminal, so a ctl that could not reach a daemon
+exited quietly and was indistinguishable from a dead key. Cold start 25ms, then
+the ~1ms path. No autostart entry needed.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
