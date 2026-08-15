@@ -519,6 +519,43 @@ Deferred deliberately: **persistence**. Session-only is the default anyway, and
 encrypted pinned entries depend on the unresolved keyring/D-Bus choice. Nothing
 about the storage decisions changes; they are simply not implemented yet.
 
+## FIXED 2026-08-15 — an unkillable daemon
+
+Reported symptom: `dropkickctl quit` run several times, and `ps aux | grep
+dropkick` still showed a daemon. Two bugs compounding, both mine.
+
+**1. Non-daemon modes deleted a running daemon's socket.** `main` ended with an
+unconditional `remove_file(socket_path())`, but `--bench`, `--shot` and
+`--set-clipboard` never *create* a socket. Running `--bench` while a daemon was
+up therefore unlinked that daemon's socket. Which is exactly what happened —
+the socket was destroyed by a benchmark run during a debugging session, not by
+anything the user did.
+
+**2. Startup unlinked the socket path blind.** `spawn_listener` removed any
+existing socket before binding, with a comment claiming this was safe because a
+live daemon would have answered a connect first. It never attempted that
+connect. The justification described code that did not exist.
+
+Either bug alone produces the same end state: a daemon **alive, holding a
+listening socket on an orphaned inode, and unreachable forever**. `dropkickctl
+quit` then fails to connect, helpfully auto-starts a *fresh* daemon, quits that
+one, and reports success while the real daemon survives untouched. Every quit
+attempt spawned and killed a new process.
+
+Fixes: `bind_control_socket` now tries `bind` first and only reclaims the path
+if a `connect` proves nobody is listening; a second daemon refuses to start and
+exits non-zero rather than stealing the socket. `main` removes the socket only
+if this process created it.
+
+Pinned by four tests in `ipc.rs` covering a free path, a live owner, the corpse
+a crash leaves behind, and the `0600` mode. This class of bug is invisible from
+the outside — the process list looks normal and the tool simply stops
+responding — so it is worth the tests.
+
+Lesson worth keeping: **a comment asserting an invariant is not the invariant.**
+The reasoning in that comment was sound; the code just did not implement it, and
+nothing checked.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

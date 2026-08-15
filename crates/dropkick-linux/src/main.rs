@@ -545,6 +545,7 @@ fn main() {
         }
     };
 
+    let mut owns_socket = false;
     let conn = Connection::connect_to_env().expect("no Wayland compositor");
     let (globals, event_queue) = registry_queue_init(&conn).expect("registry init");
     let qh: QueueHandle<Dropkick> = event_queue.handle();
@@ -636,7 +637,14 @@ fn main() {
         state.set_clipboard(text, &qh);
     } else {
         match ipc::spawn_listener(tx) {
-            Ok(path) => println!("dropkickd: listening on {} (0600)", path.display()),
+            Ok(path) => {
+                println!("dropkickd: listening on {} (0600)", path.display());
+                owns_socket = true;
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::AddrInUse => {
+                eprintln!("dropkickd: {e}. Stop it first:  dropkickctl quit");
+                std::process::exit(1);
+            }
             Err(e) => {
                 eprintln!("dropkickd: cannot bind control socket: {e}");
                 return;
@@ -659,7 +667,12 @@ fn main() {
     if !state.bench && !state.done.is_empty() {
         summarise(&state.done);
     }
-    let _ = std::fs::remove_file(ipc::socket_path());
+    // Only clean up a socket this process actually created. --bench, --shot and
+    // --set-clipboard never bind one, and deleting the path anyway unlinks a
+    // *running* daemon's socket, leaving it alive but unreachable.
+    if owns_socket {
+        let _ = std::fs::remove_file(ipc::socket_path());
+    }
 }
 
 /// Wayland keysyms -> Dropkick's platform-independent key model. The tools
