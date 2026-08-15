@@ -6,7 +6,9 @@ resolver = "2"
 version = "0.0.1"
 edition = "2021"
 license = "MIT"
-rust-version = "1.85"
+# 1.87 for std::io::pipe(), which the clipboard uses to receive an offer
+# without pulling in a libc wrapper crate.
+rust-version = "1.87"
 
 # Dropkick summons and dismisses on a keystroke, so the binary is optimised for
 # the resident case: one slow build, many fast frames.
