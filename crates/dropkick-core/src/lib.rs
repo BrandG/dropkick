@@ -17,7 +17,7 @@
 pub mod app;
 pub mod calculator;
 pub mod key;
-pub mod notepad;
+pub mod scratchpad;
 pub mod text;
 
 pub use app::{App, Response, ToolId, TOOLS};

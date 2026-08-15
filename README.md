@@ -11,13 +11,13 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. The tab bar works, with two of four tools built: Calculator and
-Notepad. Calendar and ColorPicker show as dimmed tabs holding their permanent
-keys, so nothing renumbers when they arrive.
+Pre-alpha. The tab bar works, with two tools built: Calculator and Scratchpad.
+The rest show as dimmed tabs already holding their permanent keys, so nothing
+renumbers when they arrive.
 
 ![Calculator](docs/img/calculator.png)
 
-![Notepad](docs/img/notepad.png)
+![Scratchpad](docs/img/scratchpad.png)
 
 ## How it behaves
 
@@ -30,8 +30,9 @@ Super+D 437*1.18        you were already in the calculator
 ```
 
 Switching tools is `Alt+Q`, `Alt+W`, `Alt+E`… — the top key row maps
-left-to-right onto the tabs. `Alt`, not `Shift`, because `Shift+Q` is the letter
-`Q` and would be swallowed by the tab bar the moment you started a note with it.
+left-to-right onto the tabs. `Alt+H` and `Alt+L` step to the previous and next
+tab. `Alt`, not `Shift`, because `Shift+Q` is the letter `Q` and would be
+swallowed by the tab bar the moment you started a note with it.
 
 `Esc` always means "up one level": leave insert mode, leave the tool, dismiss.
 Double-`Esc` dismisses from anywhere.
@@ -174,20 +175,25 @@ press after that is ~1ms.
 
 ## Keys
 
-Tools, by permanent key:
+Tools, by permanent key. The top row is the whole roster — **ten slots, ever** —
+and a key never moves once assigned:
 
 | key | tool | |
 |---|---|---|
-| `Alt+Q` | Calculator | built |
-| `Alt+W` | Calendar | not built |
-| `Alt+E` | Notepad | built |
-| `Alt+R` | ColorPicker | not built |
+| `Alt+Q` | Calculator | built — expressions, units, date maths |
+| `Alt+W` | Scratchpad | built — notes, text transforms |
+| `Alt+E` | Clipboard | planned |
+| `Alt+R` | Calendar | planned |
+| `Alt+T` | Timer/Stopwatch | planned |
+| `Alt+Y` | Generate | planned — passwords, UUIDs, hashes |
+| `Alt+U` | Color | planned — converter and eyedropper |
+| `Alt+I` `Alt+O` `Alt+P` | — | deliberately unspent |
 
 Calculator takes a plain expression: `+ - * / % ^`, parentheses, `sqrt abs ln
 log sin cos tan round floor ceil`, the constants `pi` and `e`, and `ans` for the
 previous result. `Enter` evaluates.
 
-Notepad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
+Scratchpad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
 mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes. Undo is
 per *burst*, not per character, so one `u` takes back a whole typing run — which
 is also what makes a keystroke that landed before you saw the panel recoverable.

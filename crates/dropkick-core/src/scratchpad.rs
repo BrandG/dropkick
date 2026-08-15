@@ -1,4 +1,7 @@
-//! Notepad: the tool that disqualified Shift, and the one that needs undo.
+//! Scratchpad: the tool that disqualified Shift, and the one that needs undo.
+//!
+//! Named for what it is. "Notepad" implies documents you keep; "scratchpad"
+//! implies things you throw away, and the second is the tool.
 //!
 //! vi-flavoured but not a vi clone. Command mode navigates; insert mode types.
 //! The lesson borrowed from vi is the mode boundary, not the keymap.
@@ -24,7 +27,7 @@ struct Snapshot {
 }
 
 #[derive(Debug)]
-pub struct Notepad {
+pub struct Scratchpad {
     pub lines: Vec<String>,
     pub cx: usize,
     pub cy: usize,
@@ -32,9 +35,9 @@ pub struct Notepad {
     undo: Vec<Snapshot>,
 }
 
-impl Default for Notepad {
+impl Default for Scratchpad {
     fn default() -> Self {
-        Notepad {
+        Scratchpad {
             lines: vec![String::new()],
             cx: 0,
             cy: 0,
@@ -44,7 +47,7 @@ impl Default for Notepad {
     }
 }
 
-impl Notepad {
+impl Scratchpad {
     pub fn new() -> Self {
         Self::default()
     }
@@ -260,7 +263,7 @@ impl Notepad {
 mod tests {
     use super::*;
 
-    fn type_str(n: &mut Notepad, s: &str) {
+    fn type_str(n: &mut Scratchpad, s: &str) {
         for c in s.chars() {
             n.on_key(KeyPress::ch(c));
         }
@@ -268,7 +271,7 @@ mod tests {
 
     #[test]
     fn insert_then_escape_returns_to_command() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         assert_eq!(n.mode, Mode::Insert);
         type_str(&mut n, "hello");
@@ -280,14 +283,14 @@ mod tests {
 
     #[test]
     fn command_mode_letters_do_not_type() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         type_str(&mut n, "hjkl");
         assert_eq!(n.text(), "");
     }
 
     #[test]
     fn enter_splits_and_backspace_joins() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         type_str(&mut n, "abcd");
         n.on_key(KeyPress::plain(Key::Left));
@@ -299,7 +302,7 @@ mod tests {
 
     #[test]
     fn undo_reverses_a_whole_insert_burst() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         type_str(&mut n, "don't forget migration 37");
         n.leave_one_level();
@@ -312,7 +315,7 @@ mod tests {
     fn undo_recovers_a_stray_keystroke() {
         // The panel takes focus ~11ms before it paints, so a keystroke can land
         // in a tool the user has not seen yet. That must be recoverable.
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         type_str(&mut n, "real note");
         n.leave_one_level();
@@ -324,14 +327,14 @@ mod tests {
 
     #[test]
     fn undo_on_empty_stack_is_harmless() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         assert!(!n.undo());
         assert_eq!(n.text(), "");
     }
 
     #[test]
     fn o_opens_a_line_below_and_inserts() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         type_str(&mut n, "first");
         n.leave_one_level();
@@ -343,7 +346,7 @@ mod tests {
 
     #[test]
     fn multibyte_text_does_not_panic() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         type_str(&mut n, "café — naïve");
         n.on_key(KeyPress::plain(Key::Backspace));
@@ -354,7 +357,7 @@ mod tests {
 
     #[test]
     fn alt_chords_are_never_consumed_as_text() {
-        let mut n = Notepad::new();
+        let mut n = Scratchpad::new();
         n.on_key(KeyPress::ch('i'));
         assert!(!n.on_key(KeyPress::alt('q')));
         assert_eq!(n.text(), "");

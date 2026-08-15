@@ -7,7 +7,7 @@
 
 use crate::calculator::Calculator;
 use crate::key::{Key, KeyPress};
-use crate::notepad::Notepad;
+use crate::scratchpad::Scratchpad;
 
 /// Two Escapes closer together than this dismiss from anywhere, regardless of
 /// how many levels are open.
@@ -16,9 +16,12 @@ pub const DOUBLE_ESC_MS: u64 = 400;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToolId {
     Calculator,
+    Scratchpad,
+    Clipboard,
     Calendar,
-    Notepad,
-    ColorPicker,
+    Timer,
+    Generate,
+    Color,
 }
 
 pub struct Tool {
@@ -29,11 +32,17 @@ pub struct Tool {
     pub built: bool,
 }
 
-pub const TOOLS: [Tool; 4] = [
+/// The permanent roster. Ten slots exist in total (`q` through `p`); three are
+/// deliberately left unspent. Keys never move and retired keys stay retired, so
+/// this table is the one thing in Dropkick that must not be casually edited.
+pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Calculator, name: "Calculator", key: 'q', built: true },
-    Tool { id: ToolId::Calendar, name: "Calendar", key: 'w', built: false },
-    Tool { id: ToolId::Notepad, name: "Notepad", key: 'e', built: true },
-    Tool { id: ToolId::ColorPicker, name: "ColorPicker", key: 'r', built: false },
+    Tool { id: ToolId::Scratchpad, name: "Scratchpad", key: 'w', built: true },
+    Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'e', built: false },
+    Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
+    Tool { id: ToolId::Timer, name: "Timer", key: 't', built: false },
+    Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: false },
+    Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
 ];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +58,7 @@ pub enum Response {
 pub struct App {
     pub active: ToolId,
     pub calculator: Calculator,
-    pub notepad: Notepad,
+    pub scratchpad: Scratchpad,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     last_esc_ms: Option<u64>,
@@ -60,7 +69,7 @@ impl Default for App {
         App {
             active: ToolId::Calculator,
             calculator: Calculator::new(),
-            notepad: Notepad::new(),
+            scratchpad: Scratchpad::new(),
             notice: None,
             last_esc_ms: None,
         }
@@ -81,11 +90,11 @@ impl App {
     pub fn hints(&self) -> &'static str {
         match self.active {
             ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
-            ToolId::Notepad => match self.notepad.mode {
-                crate::notepad::Mode::Insert => "INSERT   esc command mode",
-                crate::notepad::Mode::Command => "i insert  o line  x cut  u undo  hjkl move  alt+h/l tabs  esc x",
+            ToolId::Scratchpad => match self.scratchpad.mode {
+                crate::scratchpad::Mode::Insert => "INSERT   esc command mode",
+                crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  hjkl move  alt+h/l tabs  esc x",
             },
-            _ => "not built yet   alt+q calculator   alt+e notepad",
+            _ => "not built yet   alt+q calculator   alt+w scratchpad",
         }
     }
 
@@ -151,7 +160,7 @@ impl App {
             self.notice = None;
             // Up one level, or out.
             let descended = match self.active {
-                ToolId::Notepad => self.notepad.leave_one_level(),
+                ToolId::Scratchpad => self.scratchpad.leave_one_level(),
                 _ => false,
             };
             return if descended { Response::Redraw } else { Response::Dismiss };
@@ -160,7 +169,7 @@ impl App {
         self.notice = None;
         let consumed = match self.active {
             ToolId::Calculator => self.calculator.on_key(press),
-            ToolId::Notepad => self.notepad.on_key(press),
+            ToolId::Scratchpad => self.scratchpad.on_key(press),
             _ => false,
         };
         if consumed {
@@ -174,14 +183,14 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::notepad::Mode;
+    use crate::scratchpad::Mode;
 
     #[test]
     fn alt_switches_tools_from_anywhere() {
         let mut app = App::new();
         assert_eq!(app.active, ToolId::Calculator);
-        assert_eq!(app.on_key(KeyPress::alt('e'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Notepad);
+        assert_eq!(app.on_key(KeyPress::alt('w'), 0), Response::Redraw);
+        assert_eq!(app.active, ToolId::Scratchpad);
         assert_eq!(app.on_key(KeyPress::alt('q'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Calculator);
     }
@@ -190,13 +199,13 @@ mod tests {
     fn alt_switches_even_from_insert_mode() {
         // The property Shift could not deliver.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
-        assert_eq!(app.notepad.mode, Mode::Insert);
+        assert_eq!(app.scratchpad.mode, Mode::Insert);
         app.on_key(KeyPress::alt('q'), 0);
         assert_eq!(app.active, ToolId::Calculator);
         // ...and the notepad is left exactly as it was.
-        assert_eq!(app.notepad.mode, Mode::Insert);
+        assert_eq!(app.scratchpad.mode, Mode::Insert);
     }
 
     #[test]
@@ -204,13 +213,13 @@ mod tests {
         // Regression guard for the decision itself: typing a capital Q into a
         // note must never change tools.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "Quick note".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
-        assert_eq!(app.active, ToolId::Notepad);
-        assert_eq!(app.notepad.text(), "Quick note");
+        assert_eq!(app.active, ToolId::Scratchpad);
+        assert_eq!(app.scratchpad.text(), "Quick note");
     }
 
     #[test]
@@ -219,20 +228,20 @@ mod tests {
         for c in "12*12".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "hello".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
         app.on_key(KeyPress::alt('q'), 0);
         assert_eq!(app.calculator.input, "12*12");
-        assert_eq!(app.notepad.text(), "hello");
+        assert_eq!(app.scratchpad.text(), "hello");
     }
 
     #[test]
     fn unbuilt_tools_keep_their_key_and_say_so() {
         let mut app = App::new();
-        assert_eq!(app.on_key(KeyPress::alt('w'), 0), Response::Redraw);
+        assert_eq!(app.on_key(KeyPress::alt('r'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Calculator);
         assert!(app.notice.as_deref().unwrap().contains("Calendar"));
     }
@@ -240,11 +249,11 @@ mod tests {
     #[test]
     fn esc_ladder_climbs_one_level_at_a_time() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         // insert -> command
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
-        assert_eq!(app.notepad.mode, Mode::Command);
+        assert_eq!(app.scratchpad.mode, Mode::Command);
         // command -> dismiss
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 5000), Response::Dismiss);
     }
@@ -252,7 +261,7 @@ mod tests {
     #[test]
     fn double_esc_dismisses_from_the_deepest_level() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1100), Response::Dismiss);
@@ -261,7 +270,7 @@ mod tests {
     #[test]
     fn slow_double_esc_is_two_separate_escapes() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
         // Well beyond the window: this is "leave the tool", which from command
@@ -280,7 +289,7 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.active, ToolId::Calculator);
         assert_eq!(app.on_key(KeyPress::alt('l'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Notepad);
+        assert_eq!(app.active, ToolId::Scratchpad);
         assert_eq!(app.on_key(KeyPress::alt('h'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Calculator);
     }
@@ -291,17 +300,17 @@ mod tests {
         // naive index step would land on a dead tab.
         let mut app = App::new();
         app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Notepad);
+        assert_eq!(app.active, ToolId::Scratchpad);
         app.on_key(KeyPress::alt('l'), 0);
         assert_eq!(app.active, ToolId::Calculator, "should wrap past ColorPicker");
         app.on_key(KeyPress::alt('h'), 0);
-        assert_eq!(app.active, ToolId::Notepad, "should wrap backwards past Calendar");
+        assert_eq!(app.active, ToolId::Scratchpad, "should wrap backwards past Calendar");
     }
 
     #[test]
     fn cycling_works_from_inside_insert_mode() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         app.on_key(KeyPress::alt('l'), 0);
         assert_eq!(app.active, ToolId::Calculator);
@@ -311,15 +320,15 @@ mod tests {
     fn plain_h_and_l_still_move_the_cursor() {
         // Regression guard: cycling must not steal the Scratchpad's motions.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "hello".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
         app.on_key(KeyPress::plain(Key::Escape), 0);
         app.on_key(KeyPress::ch('h'), 0);
-        assert_eq!(app.active, ToolId::Notepad);
-        assert_eq!(app.notepad.text(), "hello");
+        assert_eq!(app.active, ToolId::Scratchpad);
+        assert_eq!(app.scratchpad.text(), "hello");
     }
 
     #[test]
