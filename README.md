@@ -81,6 +81,34 @@ the clipboard and read it in about a second, using `ext_data_control_manager_v1`
 That is how every clipboard manager works. It is the environment Dropkick lives
 in, not something Dropkick introduces.
 
+## Where your data lives
+
+These are your files. Go look at them, back them up yourself, delete them
+yourself.
+
+```
+~/.local/share/dropkick/     things kept between sessions   (dir 0700, files 0600)
+$XDG_RUNTIME_DIR/dropkick/   things wiped when you log out  (tmpfs, private)
+```
+
+Nothing goes in `/tmp`: it is shared with every local user, so filenames are
+visible there even when contents are not.
+
+Most of it is plain and readable on purpose. Pinned clipboard entries and
+anything you mark secret are encrypted through the OS keyring — and that
+encryption makes one specific promise: it protects the file **if it leaves this
+machine**, in a backup, a synced folder, or a disk that is stolen or resold. It
+does not protect a machine already compromised under your account. If Dropkick
+can decrypt without asking you, so can anything else running as you.
+
+Dropkick will not ask you for a passphrase to open a scratchpad. That would be
+real security bought by becoming the kind of software this is a reaction to.
+
+Each tool decides whether it persists, and you can overrule it, including
+turning persistence off entirely.
+
+## The control socket
+
 The daemon's control socket is the one piece of attack surface Dropkick adds. It
 lives in `$XDG_RUNTIME_DIR` at mode 0600 and understands four verbs that move a
 window. There is no verb that reads clipboard history back out, and there must

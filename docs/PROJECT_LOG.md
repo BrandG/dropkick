@@ -176,17 +176,17 @@ verb reads clipboard history back out, and none may ever be added.
   change later.
 - In-tool keymaps are unspecified. They are free-form: tool switching lives on a
   modifier, so no in-tool binding can collide with it.
-- Does resume survive a daemon restart or reboot, or only sleep between
-  summons? In-memory resume is free; on-disk resume is a per-tool retention
-  decision and interacts with the clipboard retention tiers. **Raised by real
-  use 2026-08-15**: the Scratchpad has no way to save, which is this question
-  wearing a different hat. Calendar events force it too — they are the first
-  data that is meaningless unless it persists.
-- D-Bus client choice (see PORTAL FINDINGS): needed for both notifications and
-  the eyedropper, and the obvious crate conflicts with "no async runtime".
-- Whether `Alt+N`/`Alt+P` are worth one permanent tool slot.
-- Final key allocation and the Notepad -> Scratchpad rename. Cheap now,
-  permanent later; nothing has muscle memory yet.
+- ~~Does resume survive a daemon restart~~ — RESOLVED 2026-08-15, see STORAGE
+  AND CAPABILITIES.
+- ~~`Alt+N`/`Alt+P` worth a slot~~ — RESOLVED: no, `Alt+H`/`Alt+L` only.
+- ~~Final key allocation and the rename~~ — RESOLVED, roster locked.
+- **D-Bus client choice**, still open, and now on the critical path for both
+  notifications and the eyedropper. `zbus` brings an async runtime, colliding
+  with the locked "no async framework" rule. Alternatives: the `dbus` crate
+  (libdbus bindings, no async) or a hand-rolled minimal client for the two or
+  three calls actually needed.
+- Which tool, if any, takes a reserved slot (`i` `o` `p`). Character picker is
+  the only candidate raised, and only weakly.
 - Password-manager hint (`x-kde-passwordManagerHint: secret`) skip policy is
   designed but **untested** — needs a real password-manager copy to confirm.
 - Accessibility: custom-drawn toolkits (Iced/libcosmic) have limited AT-SPI
@@ -376,6 +376,86 @@ hidden**. Every other tool is inert when dismissed. That changes the daemon from
 "a window that appears" into "a process that does things while you are not
 looking", which is a real change in what Dropkick is, and deserves to be a
 deliberate yes rather than a side effect of wanting a timer.
+
+## STORAGE AND CAPABILITIES — LOCKED (user, 2026-08-15)
+
+### Optional capabilities: only where a user actually gains something
+
+- **Eyedropper gets no toggle.** `PickColor` runs only when the user presses the
+  eyedropper key. A setting could disable nothing that pressing-the-key does not
+  already control, so it would be config noise — a switch whose sole effect is
+  breaking a feature you must deliberately invoke.
+- **Notifications get a runtime preference**, because they are the one thing
+  Dropkick does that *interrupts*. "Don't interrupt me" is a legitimate want,
+  like muting sounds.
+- **A runtime toggle is explicitly NOT a security boundary.** It is a promise,
+  which is the category this project exists to avoid. Untrustworthy Dropkick
+  ignores its own checkbox; a user who does not trust the binary gains nothing
+  from the binary's own setting.
+- **The security-grade version is a compile-time feature.** A `dbus` cargo
+  feature, on by default; `--no-default-features` produces a binary with no
+  D-Bus code linked at all — no notifications, no eyedropper — verifiable by
+  inspecting the binary exactly the way the no-networking claim is. Property,
+  not promise. Cheap to set up now while only two features depend on it.
+
+### Where data lives
+
+- **Durable:** `$XDG_DATA_HOME/dropkick/` (`~/.local/share/dropkick/`),
+  directory `0700`, files `0600`. Calendar events, Scratchpad contents, pinned
+  clipboard entries.
+- **Ephemeral:** `$XDG_RUNTIME_DIR/dropkick/` — already `tmpfs, mode=700,
+  uid=1000` on this machine, so RAM-backed, private, and wiped at logout.
+- **`/tmp` rejected.** The user's instinct was ephemeral-and-safe, which is
+  exactly `$XDG_RUNTIME_DIR`; `/tmp` is neither. It is mode `1777` and shared
+  with every local user, so file *names* are visible even when contents are
+  `0600`; `systemd-tmpfiles` ages contents out on its own schedule; and on this
+  machine it is disk-backed, so it is not even ephemeral. Worst of both.
+
+### Encryption: a narrower claim than it looks
+
+`0600` in the XDG directories is the honest baseline. **Encryption is reserved
+for pinned clipboard entries and anything explicitly marked secret**, keyed
+through the OS keyring (Secret Service — the DPAPI analogue named in the
+original plan).
+
+What that encryption actually buys, and how it must be described: it protects
+data **that leaves the machine** — a backup, a synced folder, a stolen or
+resold disk. It does **not** protect a running machine compromised under the
+user's account, which the threat model already concedes in writing. If Dropkick
+can decrypt unattended, so can anything running as the user; anything stronger
+than that claim would be obfuscation sold as encryption.
+
+A typed passphrase would be genuinely strong and is **rejected**: unlocking the
+scratchpad at every login is the "sign in to continue" this project exists to
+refuse.
+
+### When writes happen
+
+**On change, debounced ~2s after the last edit, plus on hide and on clean
+shutdown.** Writes are atomic — temp file then rename — so a crash mid-write
+cannot corrupt the file.
+
+A periodic timer (the user's first suggestion, once per minute) is **rejected**:
+it writes when nothing has changed, it still loses up to a minute of work, and
+it adds another thing the daemon does while hidden.
+
+### Per-tool persistence, mirroring the resume-safety rules
+
+| tool | default |
+|---|---|
+| Scratchpad | persists |
+| Calendar | must persist — pointless otherwise |
+| Clipboard | session-only; pinned entries persist, encrypted |
+
+Each is user-overridable, including turning persistence off entirely.
+
+### Scratchpad export is the clipboard, not a file picker
+
+"No way to save what I'd written" is two features. Automatic persistence means
+*it is still there next time*. Getting text **out** of Dropkick is a separate
+need, and the answer is to yank the buffer to the system clipboard: one key, no
+dialog, paste it wherever you want. No file picker enters the project. Build it
+alongside the Clipboard tool.
 
 ## NEXT
 
