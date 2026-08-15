@@ -26,7 +26,7 @@ you used last, with your values still in it, and the tools sit as tabs across th
 top. So the common case costs nothing:
 
 ```
-Super+Space 437*1.18        you were already in the calculator
+Super+D 437*1.18        you were already in the calculator
 ```
 
 Switching tools is `Alt+Q`, `Alt+W`, `Alt+E`… — the top key row maps
