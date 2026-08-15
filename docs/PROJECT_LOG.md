@@ -32,9 +32,17 @@ featural. Unrelated to the trading projects ([[opm-project]], [[carmen-project]]
 - **Stack:** Rust + Cargo. libcosmic deferred — the probe uses
   smithay-client-toolkit directly, since the first milestone is interaction
   latency, not widgets.
-- **No SQLite, no ORM, no async runtime, no logging framework** until something
-  actually demands one. The dependency tree is audited on every change; the
+- **Keep the dependency tree small**: no SQLite, no ORM, no logging framework
+  until something actually demands one. The tree is audited on every change; the
   current count is recorded in the BUILT sections below.
+  - **Correction 2026-08-15:** "no async runtime" was previously listed here as
+    a locked user decision. It was not. It came from the planning document
+    brought into the project, and the user has since said they did not write it
+    and it was never explained to them. It is **downgraded to a preference**:
+    do not take on a large async runtime without a reason, because for a program
+    that sleeps until a keypress it is machinery with nothing to do. It is not a
+    law, and it must not be cited to block a feature the user wants. See the
+    D-Bus question.
 
 ## UI MODEL — LOCKED (user, 2026-08-13)
 
@@ -180,11 +188,14 @@ verb reads clipboard history back out, and none may ever be added.
   AND CAPABILITIES.
 - ~~`Alt+N`/`Alt+P` worth a slot~~ — RESOLVED: no, `Alt+H`/`Alt+L` only.
 - ~~Final key allocation and the rename~~ — RESOLVED, roster locked.
-- **D-Bus client choice**, still open, and now on the critical path for both
-  notifications and the eyedropper. `zbus` brings an async runtime, colliding
-  with the locked "no async framework" rule. Alternatives: the `dbus` crate
-  (libdbus bindings, no async) or a hand-rolled minimal client for the two or
-  three calls actually needed.
+- **D-Bus client choice**, still open, and on the critical path for both
+  notifications and the eyedropper. Previously framed as blocked by a "no async
+  runtime" rule; that rule was inherited rather than chosen (see the correction
+  above), so this is now an ordinary trade-off: `zbus` is the mainstream crate
+  and brings an async runtime and a few dozen crates; the `dbus` crate wraps the
+  libdbus C library instead; a hand-rolled client for the two or three calls
+  actually needed is also viable. Decide on weight and maintenance, not on a
+  rule nobody agreed to.
 - Which tool, if any, takes a reserved slot (`i` `o` `p`). Character picker is
   the only candidate raised, and only weakly.
 - Password-manager hint (`x-kde-passwordManagerHint: secret`) skip policy is
@@ -366,10 +377,10 @@ Both newly approved features land on D-Bus, and both are available here:
 **But both require a D-Bus client, and that is an unresolved dependency
 decision.** D-Bus is AF_UNIX, so it does not touch the no-networking rule — the
 planned seccomp filter blocks AF_INET/AF_INET6 only. The problem is that the
-mainstream Rust D-Bus crate (`zbus`) brings an async runtime, which collides
-with the locked "no async framework" decision. Options: the `dbus` crate
-(libdbus bindings, no async), a hand-rolled minimal client for the two or three
-calls actually needed, or relaxing the rule. Not yet decided.
+mainstream Rust D-Bus crate (`zbus`) brings an async runtime and a few dozen
+crates with it. Options: `zbus`, the `dbus` crate (libdbus bindings), or a
+hand-rolled minimal client for the two or three calls actually needed. Not yet
+decided, and explicitly not blocked by the old "no async" wording.
 
 Also note this makes the timer the **first tool that acts while Dropkick is
 hidden**. Every other tool is inert when dismissed. That changes the daemon from
