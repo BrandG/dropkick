@@ -6,6 +6,7 @@
 
 use dropkick_core::app::{App, ToolId, TOOLS};
 use dropkick_core::notepad::Mode;
+use dropkick_core::text::{cursor_cell, wrap_line};
 
 use crate::font::{Canvas, TextRenderer};
 
@@ -130,52 +131,67 @@ fn draw_calculator(
 fn draw_notepad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, bottom: i32) {
     let lh = text.line_height();
     let adv = text.advance();
-    let mut y = top as f32 + lh;
-    let n = app.notepad.lines.len();
+    let cols = (((canvas.w as f32 - PAD * 2.0) / adv).floor() as usize).max(1);
 
+    // Flatten logical lines into wrapped display rows, noting where the cursor
+    // lands. Wrapping is presentation only: the buffer keeps real lines, so a
+    // wrapped note pasted elsewhere has no hard breaks in it.
+    let mut rows: Vec<(usize, usize, usize)> = Vec::new();
+    let mut cur_row = 0usize;
+    let mut cur_col = 0usize;
     for (i, line) in app.notepad.lines.iter().enumerate() {
-        if y > bottom as f32 {
-            break;
-        }
+        let segments = wrap_line(line, cols);
         if i == app.notepad.cy {
-            let cursor_x = PAD + app.notepad.cx as f32 * adv;
-            match app.notepad.mode {
-                Mode::Command => {
-                    // Block cursor sits *on* a character.
-                    canvas.fill_rect(
-                        cursor_x as i32,
-                        (y - lh * 0.72) as i32,
-                        adv as i32,
-                        (lh * 0.85) as i32,
-                        ACCENT,
-                    );
-                }
-                Mode::Insert => {
-                    canvas.fill_rect(
-                        cursor_x as i32,
-                        (y - lh * 0.72) as i32,
-                        2,
-                        (lh * 0.85) as i32,
-                        ACCENT,
-                    );
-                }
-            }
+            let (r, c) = cursor_cell(&segments, app.notepad.cx);
+            cur_row = rows.len() + r;
+            cur_col = c;
+        }
+        for (s, e) in segments {
+            rows.push((i, s, e));
+        }
+    }
+
+    let visible = (((bottom - top) as f32 / lh).floor() as usize).max(1);
+    // Scroll only as far as it takes to keep the cursor on screen.
+    let scroll = cur_row.saturating_sub(visible.saturating_sub(1));
+
+    let mut y = top as f32 + lh;
+    for (idx, &(line_i, seg_start, seg_end)) in
+        rows.iter().enumerate().skip(scroll).take(visible)
+    {
+        let chars: Vec<char> = app.notepad.lines[line_i].chars().collect();
+        let on_cursor_row = idx == cur_row;
+
+        if on_cursor_row {
+            let cx_px = PAD + cur_col as f32 * adv;
+            let (w, top_y, h) = match app.notepad.mode {
+                Mode::Command => (adv as i32, y - lh * 0.72, lh * 0.85),
+                Mode::Insert => (2, y - lh * 0.72, lh * 0.85),
+            };
+            canvas.fill_rect(cx_px as i32, top_y as i32, w, h as i32, ACCENT);
         }
 
-        // Draw the character under a block cursor in the background colour so it
-        // stays readable.
         let mut pen = PAD;
-        for (ci, c) in line.chars().enumerate() {
-            let under_block = i == app.notepad.cy
-                && ci == app.notepad.cx
-                && app.notepad.mode == Mode::Command;
+        for (k, c) in chars[seg_start..seg_end].iter().enumerate() {
+            // Keep the character under a block cursor legible.
+            let under_block =
+                on_cursor_row && k == cur_col && app.notepad.mode == Mode::Command;
             let color = if under_block { BG } else { FG };
             pen = text.draw(canvas, pen, y, &c.to_string(), color);
         }
         y += lh;
     }
 
-    if n == 1 && app.notepad.lines[0].is_empty() && app.notepad.mode == Mode::Command {
+    if rows.len() > visible {
+        let marker = format!("{}/{}", cur_row + 1, rows.len());
+        let x = canvas.w as f32 - PAD - text.width_of(&marker);
+        text.draw(canvas, x, bottom as f32 - lh * 0.3, &marker, FAINT);
+    }
+
+    if app.notepad.lines.len() == 1
+        && app.notepad.lines[0].is_empty()
+        && app.notepad.mode == Mode::Command
+    {
         text.draw(canvas, PAD, top as f32 + lh * 2.4, "press i to start typing", FAINT);
     }
 }

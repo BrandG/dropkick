@@ -570,6 +570,21 @@ fn shots(prefix: &str) -> std::io::Result<()> {
             }),
         ),
         (
+            "notepad-wrap",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                let para = "Word wrap matters more than it sounds: without it a long \
+thought runs off the right edge and the rest of the sentence is simply gone, which \
+is exactly what happened the first time this scratchpad was used in anger. Wrapping \
+is presentation only - the buffer still holds real lines, so nothing gains a hard \
+break it did not have.";
+                for c in para.chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
             "unbuilt-tab",
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('w'), 0);

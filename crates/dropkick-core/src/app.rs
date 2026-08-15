@@ -80,13 +80,32 @@ impl App {
     /// reminders" row.
     pub fn hints(&self) -> &'static str {
         match self.active {
-            ToolId::Calculator => "type an expression   enter =   ans reuses last   esc x",
+            ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
             ToolId::Notepad => match self.notepad.mode {
                 crate::notepad::Mode::Insert => "INSERT   esc command mode",
-                crate::notepad::Mode::Command => "i insert   o new line   x cut   u undo   hjkl move   esc x",
+                crate::notepad::Mode::Command => "i insert  o line  x cut  u undo  hjkl move  alt+h/l tabs  esc x",
             },
             _ => "not built yet   alt+q calculator   alt+e notepad",
         }
+    }
+
+    /// Step to the next or previous *built* tool, wrapping around. Unbuilt
+    /// tools are skipped: cycling into a dead tab would make the convenience
+    /// worse than the direct chord it exists to save.
+    fn cycle(&mut self, forward: bool) -> Response {
+        let built: Vec<ToolId> = TOOLS.iter().filter(|t| t.built).map(|t| t.id).collect();
+        if built.len() < 2 {
+            return Response::Ignored;
+        }
+        let at = built.iter().position(|id| *id == self.active).unwrap_or(0);
+        let next = if forward {
+            (at + 1) % built.len()
+        } else {
+            (at + built.len() - 1) % built.len()
+        };
+        self.active = built[next];
+        self.notice = None;
+        Response::Redraw
     }
 
     pub fn on_key(&mut self, press: KeyPress, now_ms: u64) -> Response {
@@ -96,6 +115,13 @@ impl App {
         if press.mods.alt {
             if let Key::Char(c) = press.key {
                 let c = c.to_ascii_lowercase();
+                // Cycling lives on h/l rather than p/n on purpose: tool keys
+                // come from the top row, so Alt+P would permanently cost the
+                // tenth tool slot while Alt+H and Alt+L cost nothing. They are
+                // also the directions the Scratchpad already uses.
+                if c == 'h' || c == 'l' {
+                    return self.cycle(c == 'l');
+                }
                 if let Some(tool) = TOOLS.iter().find(|t| t.key == c) {
                     self.notice = None;
                     if !tool.built {
@@ -250,11 +276,65 @@ mod tests {
     }
 
     #[test]
+    fn cycling_steps_between_built_tools() {
+        let mut app = App::new();
+        assert_eq!(app.active, ToolId::Calculator);
+        assert_eq!(app.on_key(KeyPress::alt('l'), 0), Response::Redraw);
+        assert_eq!(app.active, ToolId::Notepad);
+        assert_eq!(app.on_key(KeyPress::alt('h'), 0), Response::Redraw);
+        assert_eq!(app.active, ToolId::Calculator);
+    }
+
+    #[test]
+    fn cycling_skips_unbuilt_tools_and_wraps() {
+        // Calendar and ColorPicker sit between and after the built pair, so a
+        // naive index step would land on a dead tab.
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('l'), 0);
+        assert_eq!(app.active, ToolId::Notepad);
+        app.on_key(KeyPress::alt('l'), 0);
+        assert_eq!(app.active, ToolId::Calculator, "should wrap past ColorPicker");
+        app.on_key(KeyPress::alt('h'), 0);
+        assert_eq!(app.active, ToolId::Notepad, "should wrap backwards past Calendar");
+    }
+
+    #[test]
+    fn cycling_works_from_inside_insert_mode() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::ch('i'), 0);
+        app.on_key(KeyPress::alt('l'), 0);
+        assert_eq!(app.active, ToolId::Calculator);
+    }
+
+    #[test]
+    fn plain_h_and_l_still_move_the_cursor() {
+        // Regression guard: cycling must not steal the Scratchpad's motions.
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::ch('i'), 0);
+        for c in "hello".chars() {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        app.on_key(KeyPress::plain(Key::Escape), 0);
+        app.on_key(KeyPress::ch('h'), 0);
+        assert_eq!(app.active, ToolId::Notepad);
+        assert_eq!(app.notepad.text(), "hello");
+    }
+
+    #[test]
     fn tool_keys_are_unique() {
         for (i, a) in TOOLS.iter().enumerate() {
             for b in TOOLS.iter().skip(i + 1) {
                 assert_ne!(a.key, b.key, "{} and {} share a key", a.name, b.name);
             }
+        }
+    }
+
+    #[test]
+    fn tool_keys_never_collide_with_cycling() {
+        for t in TOOLS.iter() {
+            assert!(t.key != 'h' && t.key != 'l', "{} collides with cycling", t.name);
         }
     }
 }

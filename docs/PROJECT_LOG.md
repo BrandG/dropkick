@@ -178,7 +178,15 @@ verb reads clipboard history back out, and none may ever be added.
   modifier, so no in-tool binding can collide with it.
 - Does resume survive a daemon restart or reboot, or only sleep between
   summons? In-memory resume is free; on-disk resume is a per-tool retention
-  decision and interacts with the clipboard retention tiers.
+  decision and interacts with the clipboard retention tiers. **Raised by real
+  use 2026-08-15**: the Scratchpad has no way to save, which is this question
+  wearing a different hat. Calendar events force it too — they are the first
+  data that is meaningless unless it persists.
+- D-Bus client choice (see PORTAL FINDINGS): needed for both notifications and
+  the eyedropper, and the obvious crate conflicts with "no async runtime".
+- Whether `Alt+N`/`Alt+P` are worth one permanent tool slot.
+- Final key allocation and the Notepad -> Scratchpad rename. Cheap now,
+  permanent later; nothing has muscle memory yet.
 - Password-manager hint (`x-kde-passwordManagerHint: secret`) skip policy is
   designed but **untested** — needs a real password-manager copy to confirm.
 - Accessibility: custom-drawn toolkits (Iced/libcosmic) have limited AT-SPI
@@ -254,6 +262,120 @@ Also fixed: `dropkickctl` now starts `dropkickd` on demand and retries for up to
 3s. A keybinding runs with no terminal, so a ctl that could not reach a daemon
 exited quietly and was indistinguishable from a dead key. Cold start 25ms, then
 the ~1ms path. No autostart entry needed.
+
+## TOOL ROSTER — decided 2026-08-15 (user)
+
+**The top row is the cap: ten tools, ever.** Tool keys come from `q w e r t y u
+i o p`, keys are permanent, and retired keys stay retired. The user's framing:
+adding a tool should be a BIG decision. The ceiling is treated as a feature —
+it is the "is this a small desktop utility?" rule made physical, and an eleventh
+tool is a signal that two of the ten should have been one.
+
+Dispositions:
+
+| tool | decision |
+|---|---|
+| Calculator | built. Absorbs **unit conversion** and **date arithmetic** |
+| Scratchpad | built (as "Notepad"). Absorbs **text transforms** |
+| Clipboard history | the flagship; masked resume already specified |
+| Calendar | event grid, not a viewer — see below |
+| Timer/Stopwatch | approved **including notifications** |
+| Generate | password + UUID + hash folded into one tool, one key |
+| Color | converter **and** eyedropper, both approved |
+| Character picker | optional; a free slot exists if wanted |
+
+Folded in rather than given keys: unit conversion (into Calculator), date
+arithmetic (into Calculator), text transforms (into Scratchpad), timezone
+conversion (into Calendar). Rejected outright: a snippet expander — pinned
+clipboard entries already are snippets.
+
+Per-tool notes from the user:
+
+- **Unit conversion needs discoverability.** With no network there is no LLM to
+  interpret "12 furlongs in RPM", so the calculator must *show* its supported
+  units and formats. This is the strongest argument for the help screen below.
+- **Hash takes pasted text only.** No file picker — that is a whole subsystem
+  for one feature.
+- **Password generator must state plainly that nothing is stored.** Wording to
+  the effect of: passwords are not retained in any fashion; saving it somewhere
+  safe is the user's job. Settings needed: length, alpha, numeric,
+  capitalisation, special characters, and exclusion of visually similar
+  characters (`I` or `1`, not both).
+- **Calendar** is a month grid with a dot on days holding events, arrow-key
+  navigation, and the focused day's events listed at the bottom. Add/remove
+  stays basic. Reminders are wanted but depend on the notification decision.
+  Rationale for building it at all despite the clock applet having a calendar:
+  *there is no keypress that brings the applet up*, so checking a date means
+  reaching for the mouse and leaving the home keys.
+- **Timezones**: a settable secondary time display, visible while using the tool.
+
+## HELP SCREEN — required (user, 2026-08-15)
+
+Every tool gets a one-page cheatsheet, flicked on and off, showing that tool's
+keys and capabilities. It is the answer to unit-conversion discoverability and
+to the general problem of a keyboard-only app being unguessable.
+
+Design consequences:
+
+- It is an **overlay, not a tab** — it costs no slot, keeps the tool's context
+  behind it, and slots naturally into the Esc ladder as one more level.
+- **`?` cannot be the binding.** `?` is Shift+/, which is *text* in the
+  Scratchpad's insert mode — the identical collision that disqualified Shift for
+  tab switching. Help is global, so by the established rule it belongs on Alt.
+  `Alt+/` is the natural choice; `?` may additionally work where no text entry
+  is active, but must never be the only way in.
+
+## TAB CYCLING — added 2026-08-15
+
+`Alt+H` previous, `Alt+L` next, skipping unbuilt tools so cycling never lands on
+a dead tab.
+
+The user asked for `Alt+P`/`Alt+N`. **`Alt+P` would permanently cost the tenth
+tool slot**, since tool keys come from the top row and `p` is in it. `Alt+N` is
+free forever (`n` is not a top-row key), but a half-implemented pair is worse
+than a consistent one. `Alt+H`/`Alt+L` cost nothing, sit on the home row, and
+match the directions the Scratchpad already uses for motion. Adding `Alt+N`/
+`Alt+P` as aliases remains available at the price of one slot — user's call.
+
+## FIRST REAL USE — 2026-08-15
+
+The user wrote notes on a design discussion in the Scratchpad, and reported the
+experience as better than opening a window over the thing being commented on:
+instant, and out of the way. Two gaps found by use rather than by testing:
+
+- **No word wrap.** Long lines ran off the right edge and the rest of the
+  sentence was simply gone. **Fixed**: `dropkick_core::text` does word wrapping
+  with mid-word breaks only for words longer than the panel, plus scrolling that
+  keeps the cursor on screen and a `row/total` marker when content overflows.
+  Wrapping is presentation only — the buffer keeps real lines, so nothing gains
+  a hard break it did not have.
+- **No way to save.** Still open, and it is the same question as "does resume
+  survive a daemon restart". See OPEN QUESTIONS.
+
+## PORTAL FINDINGS FOR THE APPROVED FEATURES (2026-08-15)
+
+Both newly approved features land on D-Bus, and both are available here:
+
+- **`org.freedesktop.portal.Screenshot.PickColor`** exists (version 2). This is
+  purpose-built for eyedroppers: it returns a single colour rather than a screen
+  capture, so the eyedropper does **not** need ongoing screen-capture
+  permission. Much cheaper than assumed.
+- **`org.freedesktop.portal.Notification.AddNotification`** exists (version 1),
+  with an `ActionInvoked` signal for clickable actions.
+
+**But both require a D-Bus client, and that is an unresolved dependency
+decision.** D-Bus is AF_UNIX, so it does not touch the no-networking rule — the
+planned seccomp filter blocks AF_INET/AF_INET6 only. The problem is that the
+mainstream Rust D-Bus crate (`zbus`) brings an async runtime, which collides
+with the locked "no async framework" decision. Options: the `dbus` crate
+(libdbus bindings, no async), a hand-rolled minimal client for the two or three
+calls actually needed, or relaxing the rule. Not yet decided.
+
+Also note this makes the timer the **first tool that acts while Dropkick is
+hidden**. Every other tool is inert when dismissed. That changes the daemon from
+"a window that appears" into "a process that does things while you are not
+looking", which is a real change in what Dropkick is, and deserves to be a
+deliberate yes rather than a side effect of wanting a timer.
 
 ## NEXT
 
