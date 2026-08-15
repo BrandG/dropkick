@@ -6,6 +6,7 @@
 //! A retired tool's key stays retired.
 
 use crate::calculator::Calculator;
+use crate::clipboard::{Clipboard, Outcome};
 use crate::key::{Key, KeyPress};
 use crate::scratchpad::Scratchpad;
 
@@ -38,12 +39,20 @@ pub struct Tool {
 pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Calculator, name: "Calculator", key: 'q', built: true },
     Tool { id: ToolId::Scratchpad, name: "Scratchpad", key: 'w', built: true },
-    Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'e', built: false },
+    Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'e', built: true },
     Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
     Tool { id: ToolId::Timer, name: "Timer", key: 't', built: false },
     Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: false },
     Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
 ];
+
+/// Work the core wants done that only the platform can do. Core never touches
+/// a system clipboard, a notification daemon or a file; it asks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Request {
+    /// Put this text on the system clipboard.
+    SetClipboard(String),
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Response {
@@ -59,8 +68,11 @@ pub struct App {
     pub active: ToolId,
     pub calculator: Calculator,
     pub scratchpad: Scratchpad,
+    pub clipboard: Clipboard,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
+    /// Drained by the platform after every key.
+    pub pending: Vec<Request>,
     last_esc_ms: Option<u64>,
 }
 
@@ -70,7 +82,9 @@ impl Default for App {
             active: ToolId::Calculator,
             calculator: Calculator::new(),
             scratchpad: Scratchpad::new(),
+            clipboard: Clipboard::new(),
             notice: None,
+            pending: Vec::new(),
             last_esc_ms: None,
         }
     }
@@ -94,6 +108,18 @@ impl App {
                 crate::scratchpad::Mode::Insert => "INSERT   esc command mode",
                 crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  hjkl move  alt+h/l tabs  esc x",
             },
+            ToolId::Clipboard => {
+                if !self.clipboard.revealed {
+                    "hidden - press any key to reveal   esc x"
+                } else {
+                    match self.clipboard.mode {
+                        crate::clipboard::Mode::Search => "SEARCH   enter accept   esc back",
+                        crate::clipboard::Mode::List => {
+                            "enter paste  / find  p pin  d del  x clear  c pause  m hide  esc x"
+                        }
+                    }
+                }
+            }
             _ => "not built yet   alt+q calculator   alt+w scratchpad",
         }
     }
@@ -113,8 +139,22 @@ impl App {
             (at + built.len() - 1) % built.len()
         };
         self.active = built[next];
+        self.on_enter_tool();
         self.notice = None;
         Response::Redraw
+    }
+
+    /// Called whenever a tool becomes active, and on every summon.
+    fn on_enter_tool(&mut self) {
+        if self.active == ToolId::Clipboard {
+            self.clipboard.on_enter();
+        }
+    }
+
+    /// The platform calls this when the panel is summoned. Resume must not mean
+    /// "put whatever was on screen last time back on screen".
+    pub fn on_summon(&mut self) {
+        self.on_enter_tool();
     }
 
     pub fn on_key(&mut self, press: KeyPress, now_ms: u64) -> Response {
@@ -141,8 +181,11 @@ impl App {
                         return Response::Ignored;
                     }
                     // Switching preserves the other tool's state: it is simply
-                    // left alone.
+                    // left alone. The clipboard is the exception - it re-masks,
+                    // because arriving at it is exactly when its contents should
+                    // not already be on screen.
                     self.active = tool.id;
+                    self.on_enter_tool();
                     return Response::Redraw;
                 }
             }
@@ -161,21 +204,43 @@ impl App {
             // Up one level, or out.
             let descended = match self.active {
                 ToolId::Scratchpad => self.scratchpad.leave_one_level(),
+                ToolId::Clipboard => self.clipboard.leave_one_level(),
                 _ => false,
             };
             return if descended { Response::Redraw } else { Response::Dismiss };
         }
 
         self.notice = None;
-        let consumed = match self.active {
-            ToolId::Calculator => self.calculator.on_key(press),
-            ToolId::Scratchpad => self.scratchpad.on_key(press),
-            _ => false,
-        };
-        if consumed {
-            Response::Redraw
-        } else {
-            Response::Ignored
+        match self.active {
+            ToolId::Calculator => {
+                if self.calculator.on_key(press) {
+                    Response::Redraw
+                } else {
+                    Response::Ignored
+                }
+            }
+            ToolId::Scratchpad => {
+                let consumed = self.scratchpad.on_key(press);
+                if let Some(text) = self.scratchpad.take_yank() {
+                    self.pending.push(Request::SetClipboard(text));
+                    self.notice = Some("scratchpad copied to clipboard".to_string());
+                }
+                if consumed {
+                    Response::Redraw
+                } else {
+                    Response::Ignored
+                }
+            }
+            ToolId::Clipboard => match self.clipboard.on_key(press) {
+                Outcome::Paste(text) => {
+                    self.pending.push(Request::SetClipboard(text));
+                    // Pick, vanish, paste. Staying open would just be in the way.
+                    Response::Dismiss
+                }
+                Outcome::Redraw => Response::Redraw,
+                Outcome::Ignored => Response::Ignored,
+            },
+            _ => Response::Ignored,
         }
     }
 }
@@ -296,15 +361,17 @@ mod tests {
 
     #[test]
     fn cycling_skips_unbuilt_tools_and_wraps() {
-        // Calendar and ColorPicker sit between and after the built pair, so a
-        // naive index step would land on a dead tab.
+        // Calendar, Timer, Generate and Color trail the built three, so a naive
+        // index step would land on a dead tab.
         let mut app = App::new();
         app.on_key(KeyPress::alt('l'), 0);
         assert_eq!(app.active, ToolId::Scratchpad);
         app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Calculator, "should wrap past ColorPicker");
+        assert_eq!(app.active, ToolId::Clipboard);
+        app.on_key(KeyPress::alt('l'), 0);
+        assert_eq!(app.active, ToolId::Calculator, "should wrap past the unbuilt tail");
         app.on_key(KeyPress::alt('h'), 0);
-        assert_eq!(app.active, ToolId::Scratchpad, "should wrap backwards past Calendar");
+        assert_eq!(app.active, ToolId::Clipboard, "should wrap backwards past the tail");
     }
 
     #[test]
@@ -313,7 +380,7 @@ mod tests {
         app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Calculator);
+        assert_eq!(app.active, ToolId::Clipboard);
     }
 
     #[test]
@@ -329,6 +396,67 @@ mod tests {
         app.on_key(KeyPress::ch('h'), 0);
         assert_eq!(app.active, ToolId::Scratchpad);
         assert_eq!(app.scratchpad.text(), "hello");
+    }
+
+    #[test]
+    fn arriving_at_the_clipboard_always_masks_it() {
+        let mut app = App::new();
+        app.clipboard.record("secret token", &[]);
+        app.on_key(KeyPress::alt('e'), 0);
+        assert_eq!(app.active, ToolId::Clipboard);
+        assert!(!app.clipboard.revealed);
+        // reveal, leave, come back
+        app.on_key(KeyPress::ch('j'), 0);
+        assert!(app.clipboard.revealed);
+        app.on_key(KeyPress::alt('q'), 0);
+        app.on_key(KeyPress::alt('e'), 0);
+        assert!(!app.clipboard.revealed, "returning must re-mask");
+    }
+
+    #[test]
+    fn a_summon_re_masks_even_without_switching() {
+        let mut app = App::new();
+        app.clipboard.record("secret token", &[]);
+        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::ch('j'), 0);
+        assert!(app.clipboard.revealed);
+        app.on_summon();
+        assert!(!app.clipboard.revealed, "resume must not put secrets back on screen");
+    }
+
+    #[test]
+    fn esc_dismisses_a_masked_clipboard_without_revealing_it() {
+        let mut app = App::new();
+        app.clipboard.record("secret token", &[]);
+        app.on_key(KeyPress::alt('e'), 0);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 0), Response::Dismiss);
+        assert!(!app.clipboard.revealed, "Esc must never be the key that reveals");
+    }
+
+    #[test]
+    fn pasting_asks_the_platform_and_dismisses() {
+        let mut app = App::new();
+        app.clipboard.record("postgres://localhost", &[]);
+        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::ch('j'), 0); // reveal
+        assert_eq!(app.on_key(KeyPress::plain(Key::Enter), 0), Response::Dismiss);
+        assert_eq!(
+            app.pending,
+            vec![Request::SetClipboard("postgres://localhost".to_string())]
+        );
+    }
+
+    #[test]
+    fn scratchpad_yank_asks_the_platform() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::ch('i'), 0);
+        for c in "note to self".chars() {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        app.on_key(KeyPress::plain(Key::Escape), 0);
+        app.on_key(KeyPress::ch('y'), 0);
+        assert_eq!(app.pending, vec![Request::SetClipboard("note to self".to_string())]);
     }
 
     #[test]

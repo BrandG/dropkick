@@ -33,6 +33,7 @@ pub struct Scratchpad {
     pub cy: usize,
     pub mode: Mode,
     undo: Vec<Snapshot>,
+    yank: bool,
 }
 
 impl Default for Scratchpad {
@@ -43,6 +44,7 @@ impl Default for Scratchpad {
             cy: 0,
             mode: Mode::Command,
             undo: Vec::new(),
+            yank: false,
         }
     }
 }
@@ -232,6 +234,12 @@ impl Scratchpad {
                 self.undo();
                 true
             }
+            // Getting text *out* of Dropkick without a file picker: yank the
+            // buffer to the system clipboard and paste it wherever you like.
+            Key::Char('y') => {
+                self.yank = true;
+                true
+            }
             _ => false,
         }
     }
@@ -243,6 +251,16 @@ impl Scratchpad {
             _ => {}
         }
         self.clamp();
+    }
+
+    /// Take a pending yank request, if `y` was pressed since the last check.
+    pub fn take_yank(&mut self) -> Option<String> {
+        if self.yank {
+            self.yank = false;
+            Some(self.text())
+        } else {
+            None
+        }
     }
 
     /// Esc in insert mode drops to command mode; the app layer decides what Esc
@@ -353,6 +371,27 @@ mod tests {
         n.on_key(KeyPress::plain(Key::Left));
         n.on_key(KeyPress::ch('é'));
         assert!(n.text().contains("caf"));
+    }
+
+    #[test]
+    fn y_yanks_the_whole_buffer_once() {
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "call Frank");
+        n.leave_one_level();
+        assert!(n.take_yank().is_none());
+        n.on_key(KeyPress::ch('y'));
+        assert_eq!(n.take_yank().as_deref(), Some("call Frank"));
+        assert!(n.take_yank().is_none(), "a yank must not repeat");
+    }
+
+    #[test]
+    fn y_in_insert_mode_is_just_a_letter() {
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "yes");
+        assert!(n.take_yank().is_none());
+        assert_eq!(n.text(), "yes");
     }
 
     #[test]

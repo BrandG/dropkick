@@ -5,6 +5,7 @@
 //! lets everyone else ignore it.
 
 use dropkick_core::app::{App, ToolId, TOOLS};
+use dropkick_core::clipboard::Mode as ClipMode;
 use dropkick_core::scratchpad::Mode;
 use dropkick_core::text::{cursor_cell, wrap_line};
 
@@ -39,6 +40,7 @@ pub fn draw(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
     match app.active {
         ToolId::Calculator => draw_calculator(app, text, canvas, content_top, content_bottom),
         ToolId::Scratchpad => draw_scratchpad(app, text, canvas, content_top, content_bottom),
+        ToolId::Clipboard => draw_clipboard(app, text, canvas, content_top, content_bottom),
         _ => {
             let y = (content_top + content_bottom) as f32 / 2.0;
             let msg = "not built yet";
@@ -205,6 +207,92 @@ fn draw_scratchpad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top:
         && app.scratchpad.mode == Mode::Command
     {
         text.draw(canvas, PAD, top as f32 + lh * 2.4, "press i to start typing", FAINT);
+    }
+}
+
+fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, bottom: i32) {
+    let lh = text.line_height();
+    let adv = text.advance();
+    let clip = &app.clipboard;
+    let mut y = top as f32 + lh * 1.2;
+
+    if clip.capture_paused {
+        text.draw(canvas, PAD, y, "capture paused - c resumes", ERR);
+        y += lh * 1.4;
+    }
+
+    if clip.mode == ClipMode::Search {
+        let pen = text.draw(canvas, PAD, y, "/", ACCENT);
+        let pen = text.draw(canvas, pen, y, &clip.query, FG);
+        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+        y += lh * 1.4;
+    }
+
+    let visible = clip.visible();
+    if visible.is_empty() {
+        let msg = if clip.entries().is_empty() {
+            "nothing captured yet - copy something"
+        } else {
+            "nothing matches"
+        };
+        text.draw(canvas, PAD, y + lh, msg, FAINT);
+        return;
+    }
+
+    // Reserve room for the mask banner so the list does not jump when revealed.
+    if !clip.revealed {
+        text.draw(
+            canvas,
+            PAD,
+            y,
+            "hidden - press any key to reveal, esc to leave without looking",
+            DIM,
+        );
+        y += lh * 1.4;
+    }
+
+    let cols = ((canvas.w as f32 - PAD * 2.0 - adv * 4.0) / adv) as usize;
+    let rows = (((bottom as f32 - y) / lh).floor() as usize).max(1);
+    // Scroll so the selection stays on screen.
+    let start = clip.selected.saturating_sub(rows.saturating_sub(1));
+
+    for (row, &entry_i) in visible.iter().enumerate().skip(start).take(rows) {
+        let entry = &clip.entries()[entry_i];
+        let selected = row == clip.selected;
+
+        if selected {
+            canvas.fill_rect(
+                (PAD - 8.0) as i32,
+                (y - lh * 0.78) as i32,
+                canvas.w - (PAD as i32 - 8) * 2,
+                lh as i32,
+                TAB_ACTIVE,
+            );
+        }
+
+        let marker = if entry.pinned { "*" } else { " " };
+        text.draw(canvas, PAD, y, marker, if entry.pinned { ACCENT } else { FAINT });
+
+        let body = if clip.revealed {
+            entry.preview(cols)
+        } else {
+            entry.masked(cols)
+        };
+        let color = if !clip.revealed {
+            DIM
+        } else if selected {
+            FG
+        } else {
+            DIM
+        };
+        text.draw(canvas, PAD + adv * 2.0, y, &body, color);
+        y += lh;
+    }
+
+    if visible.len() > rows {
+        let marker = format!("{}/{}", clip.selected + 1, visible.len());
+        let x = canvas.w as f32 - PAD - text.width_of(&marker);
+        text.draw(canvas, x, bottom as f32 - lh * 0.3, &marker, FAINT);
     }
 }
 

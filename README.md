@@ -11,13 +11,17 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. The tab bar works, with two tools built: Calculator and Scratchpad.
-The rest show as dimmed tabs already holding their permanent keys, so nothing
-renumbers when they arrive.
+Pre-alpha. Three tools built: Calculator, Scratchpad and Clipboard. The rest
+show as dimmed tabs already holding their permanent keys, so nothing renumbers
+when they arrive.
 
 ![Calculator](docs/img/calculator.png)
 
 ![Scratchpad](docs/img/scratchpad.png)
+
+Clipboard history, as it looks the moment you arrive — masked until you ask:
+
+![Clipboard, masked](docs/img/clipboard-masked.png)
 
 ## How it behaves
 
@@ -210,7 +214,7 @@ and a key never moves once assigned:
 |---|---|---|
 | `Alt+Q` | Calculator | built — expressions, units, date maths |
 | `Alt+W` | Scratchpad | built — notes, text transforms |
-| `Alt+E` | Clipboard | planned |
+| `Alt+E` | Clipboard | built — history, search, pinning |
 | `Alt+R` | Calendar | planned |
 | `Alt+T` | Timer/Stopwatch | planned |
 | `Alt+Y` | Generate | planned — passwords, UUIDs, hashes |
@@ -221,8 +225,15 @@ Calculator takes a plain expression: `+ - * / % ^`, parentheses, `sqrt abs ln
 log sin cos tan round floor ceil`, the constants `pi` and `e`, and `ans` for the
 previous result. `Enter` evaluates.
 
+Clipboard opens **masked**: entries show as dots with a length until you press a
+key. `Esc` leaves without revealing anything. Then `j`/`k` move, `/` searches,
+`Enter` pastes the selection and dismisses, `p` pins, `d` deletes, `x` clears
+everything unpinned, `c` pauses capture, `m` hides it again.
+
 Scratchpad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
-mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes. Undo is
+mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes, `y` copies
+the whole buffer to the clipboard — which is how you get text out without
+Dropkick ever growing a file picker. Undo is
 per *burst*, not per character, so one `u` takes back a whole typing run — which
 is also what makes a keystroke that landed before you saw the panel recoverable.
 

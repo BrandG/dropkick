@@ -25,23 +25,34 @@
 //! wait for a configure, then attach. So every summon costs one compositor
 //! round trip, and size/anchor/interactivity must be re-applied each time.
 
-use dropkick_core::app::{App, Response};
+use dropkick_core::app::{App, Request, Response};
 use dropkick_core::key::{Key as DkKey, KeyPress, Mods};
 use dropkick_linux::font::{Canvas, TextRenderer};
 use dropkick_linux::render::{self, HEIGHT, WIDTH};
 use dropkick_linux::ipc;
 
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::num::NonZeroU32;
+use std::os::fd::AsFd;
 use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::calloop::{
-    channel, timer::TimeoutAction, timer::Timer, EventLoop, LoopHandle,
+    channel, generic::Generic, timer::TimeoutAction, timer::Timer, EventLoop, Interest, LoopHandle,
+    Mode as CalloopMode, PostAction,
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::{
+    backend::ObjectId,
     globals::registry_queue_init,
     protocol::{wl_keyboard, wl_output, wl_seat, wl_shm, wl_surface},
-    Connection, QueueHandle,
+    Connection, Dispatch, Proxy, QueueHandle,
+};
+use smithay_client_toolkit::reexports::protocols_wlr::data_control::v1::client::{
+    zwlr_data_control_device_v1::{self, ZwlrDataControlDeviceV1},
+    zwlr_data_control_manager_v1::ZwlrDataControlManagerV1,
+    zwlr_data_control_offer_v1::{self, ZwlrDataControlOfferV1},
+    zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, FrameCallbackData},
@@ -124,6 +135,22 @@ struct Dropkick {
     mods: Mods,
     started: Instant,
 
+    conn: Connection,
+    /// wlr-data-control: the protocol that lets a client with no surface and no
+    /// focus observe the clipboard. It is how every clipboard manager works,
+    /// and it is ungated - see the threat model in the README.
+    data_device: Option<ZwlrDataControlDeviceV1>,
+    data_manager: Option<ZwlrDataControlManagerV1>,
+    /// MIME types announced for each pending offer, keyed by object.
+    offers: HashMap<ObjectId, Vec<String>>,
+    /// Our own source, alive for as long as we own the selection.
+    source: Option<ZwlrDataControlSourceV1>,
+    source_text: String,
+    /// Set when we take ownership of the selection, so the selection event that
+    /// comes straight back is not re-recorded as a fresh copy - and, more
+    /// importantly, so we never ask to read from our own pipe and deadlock.
+    skip_next_selection: bool,
+
     width: u32,
     height: u32,
     phase: Phase,
@@ -149,6 +176,8 @@ impl Dropkick {
         self.cycle_id += 1;
         let id = self.cycle_id;
         self.cycle = Some(Cycle::new());
+        // Resume must not mean "put the last screenful back on screen".
+        self.app.on_summon();
 
         if self.strategy == Strategy::Recreate || self.layer.is_none() {
             let surface = self.compositor.create_surface(&self.qh);
@@ -289,10 +318,138 @@ impl Dropkick {
         );
     }
 
+    fn init_clipboard(&mut self, qh: &QueueHandle<Self>) {
+        let manager = match self
+            .registry_state
+            .bind_one::<ZwlrDataControlManagerV1, _, _>(qh, 1..=2, ())
+        {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("dropkickd: no clipboard capture ({e})");
+                return;
+            }
+        };
+        let Some(seat) = self.seat_state.seats().next() else {
+            eprintln!("dropkickd: no seat, clipboard capture disabled");
+            return;
+        };
+        self.data_device = Some(manager.get_data_device(&seat, qh, ()));
+        self.data_manager = Some(manager);
+    }
+
+    /// Pull the text out of an offer without blocking the event loop: hand the
+    /// compositor a pipe, then read the far end as an event source.
+    fn receive_offer(&mut self, offer: &ZwlrDataControlOfferV1, mimes: Vec<String>) {
+        const PREFERRED: &[&str] = &[
+            "text/plain;charset=utf-8",
+            "UTF8_STRING",
+            "text/plain",
+            "STRING",
+            "TEXT",
+        ];
+        let Some(mime) = PREFERRED
+            .iter()
+            .find(|m| mimes.iter().any(|o| o == *m))
+            .map(|m| m.to_string())
+        else {
+            return; // not text; images and files are not this tool's business
+        };
+
+        let Ok((reader, writer)) = std::io::pipe() else { return };
+        offer.receive(mime, writer.as_fd());
+        drop(writer);
+        // The request must reach the compositor before anything will arrive.
+        let _ = self.conn.flush();
+
+        let mut buf: Vec<u8> = Vec::new();
+        let mimes_for_record = mimes;
+        let source = Generic::new(reader, Interest::READ, CalloopMode::Level);
+        let _ = self.handle.insert_source(source, move |_, file, state: &mut Dropkick| {
+            let mut chunk = [0u8; 8192];
+            // calloop lends the source out by shared reference; read through
+            // the `&PipeReader` impl rather than needing &mut.
+            let mut pipe: &std::io::PipeReader = file;
+            // Safety net: a hostile or broken source could stream forever.
+            const LIMIT: usize = 4 * 1024 * 1024;
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => {
+                        state.finish_capture(&buf, &mimes_for_record);
+                        return Ok(PostAction::Remove);
+                    }
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.len() > LIMIT {
+                            return Ok(PostAction::Remove);
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        return Ok(PostAction::Continue)
+                    }
+                    Err(_) => return Ok(PostAction::Remove),
+                }
+            }
+        });
+    }
+
+    fn finish_capture(&mut self, bytes: &[u8], mimes: &[String]) {
+        let Ok(text) = std::str::from_utf8(bytes) else { return };
+        let kept = self.app.clipboard.record(text, mimes);
+        if std::env::var_os("DROPKICK_DEBUG").is_some() {
+            // Length and type list only. Never the content: a debug flag that
+            // prints clipboard text into a terminal scrollback would undo the
+            // point of the tool.
+            eprintln!(
+                "  [capture] {} bytes, {} mime types, kept={kept}",
+                bytes.len(),
+                mimes.len()
+            );
+        }
+        if kept && self.phase != Phase::Hidden {
+            let qh = self.qh.clone();
+            self.draw(&qh);
+        }
+    }
+
+    /// Take ownership of the system selection so other applications can paste
+    /// what the user picked.
+    fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
+        let (Some(manager), Some(device)) = (self.data_manager.as_ref(), self.data_device.as_ref())
+        else {
+            return;
+        };
+        let source = manager.create_data_source(qh, ());
+        for mime in [
+            "text/plain;charset=utf-8",
+            "text/plain",
+            "UTF8_STRING",
+            "STRING",
+            "TEXT",
+        ] {
+            source.offer(mime.to_string());
+        }
+        device.set_selection(Some(&source));
+        self.source_text = text;
+        self.source = Some(source);
+        self.skip_next_selection = true;
+        let _ = self.conn.flush();
+    }
+
+    fn drain_requests(&mut self, qh: &QueueHandle<Self>) {
+        let pending: Vec<Request> = self.app.pending.drain(..).collect();
+        for req in pending {
+            match req {
+                Request::SetClipboard(text) => self.set_clipboard(text, qh),
+            }
+        }
+    }
+
     fn dispatch_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
         let Some(press) = translate(&event, self.mods) else { return };
         let now = self.started.elapsed().as_millis() as u64;
-        match self.app.on_key(press, now) {
+        let response = self.app.on_key(press, now);
+        self.drain_requests(qh);
+        match response {
             Response::Redraw => self.draw(qh),
             Response::Dismiss => self.hide(),
             Response::Ignored => {}
@@ -368,6 +525,13 @@ fn main() {
         return;
     }
 
+    // Dev-only: take ownership of the selection and hold it, so clipboard
+    // capture can be exercised without installing a clipboard utility.
+    let set_clipboard: Option<String> = args
+        .iter()
+        .position(|a| a == "--set-clipboard")
+        .and_then(|i| args.get(i + 1).cloned());
+
     let strategy = match args.iter().position(|a| a == "--strategy").and_then(|i| args.get(i + 1)) {
         Some(v) if v == "remap" => Strategy::Remap,
         _ => Strategy::Recreate,
@@ -427,6 +591,13 @@ fn main() {
         text,
         mods: Mods::default(),
         started: Instant::now(),
+        conn: conn.clone(),
+        data_device: None,
+        data_manager: None,
+        offers: HashMap::new(),
+        source: None,
+        source_text: String::new(),
+        skip_next_selection: false,
         width: WIDTH,
         height: HEIGHT,
         phase: Phase::Hidden,
@@ -440,6 +611,10 @@ fn main() {
     WaylandSource::new(conn.clone(), event_queue)
         .insert(handle.clone())
         .expect("insert wayland source");
+
+    // Clipboard capture starts with the daemon, not with the panel: history you
+    // only collect while the window is open is not history.
+    state.init_clipboard(&qh);
 
     if state.bench {
         println!(
@@ -456,6 +631,9 @@ fn main() {
                 TimeoutAction::Drop
             },
         );
+    } else if let Some(text) = set_clipboard {
+        println!("dropkickd: holding the selection ({} bytes); ctrl-c to release", text.len());
+        state.set_clipboard(text, &qh);
     } else {
         match ipc::spawn_listener(tx) {
             Ok(path) => println!("dropkickd: listening on {} (0600)", path.display()),
@@ -513,6 +691,20 @@ fn translate(event: &KeyEvent, mods: Mods) -> Option<KeyPress> {
         }
     };
     Some(KeyPress { key, mods })
+}
+
+/// Plausible clipboard history for the rendered frames.
+fn seed_clipboard(app: &mut App) {
+    for text in [
+        "cargo build --release",
+        "postgres://localhost:5432/dropkick",
+        "https://wayland.app/protocols/wlr-data-control-unstable-v1",
+        "don't forget migration 37",
+        "postgres backup command: pg_dump -Fc dropkick > dk.dump",
+        "0x6FB3F2",
+    ] {
+        app.clipboard.record(text, &["text/plain;charset=utf-8".to_string()]);
+    }
 }
 
 /// Render frames to PPM without a compositor, so the UI can be inspected in
@@ -585,6 +777,35 @@ break it did not have.";
             }),
         ),
         (
+            "clipboard-masked",
+            Box::new(|app: &mut App| {
+                seed_clipboard(app);
+                app.on_key(KeyPress::alt('e'), 0);
+            }),
+        ),
+        (
+            "clipboard-revealed",
+            Box::new(|app: &mut App| {
+                seed_clipboard(app);
+                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::ch('j'), 0); // first key only reveals
+                app.on_key(KeyPress::ch('j'), 0);
+                app.on_key(KeyPress::ch('p'), 0); // pin the selection
+            }),
+        ),
+        (
+            "clipboard-search",
+            Box::new(|app: &mut App| {
+                seed_clipboard(app);
+                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::ch('j'), 0);
+                app.on_key(KeyPress::ch('/'), 0);
+                for c in "postgres".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
             "unbuilt-tab",
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('r'), 0);
@@ -603,6 +824,102 @@ break it did not have.";
         println!("wrote {path}");
     }
     Ok(())
+}
+
+impl Dispatch<ZwlrDataControlManagerV1, ()> for Dropkick {
+    fn event(
+        _: &mut Self,
+        _: &ZwlrDataControlManagerV1,
+        _: <ZwlrDataControlManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrDataControlDeviceV1, ()> for Dropkick {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrDataControlDeviceV1,
+        event: zwlr_data_control_device_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_data_control_device_v1::Event::DataOffer { id } => {
+                state.offers.insert(id.id(), Vec::new());
+            }
+            zwlr_data_control_device_v1::Event::Selection { id } => {
+                let Some(offer) = id else { return };
+                let mimes = state.offers.remove(&offer.id()).unwrap_or_default();
+                // Our own selection comes straight back to us. Reading it would
+                // mean writing and reading the same pipe on one thread, which
+                // deadlocks as soon as the text exceeds the pipe buffer.
+                if state.skip_next_selection {
+                    state.skip_next_selection = false;
+                    return;
+                }
+                state.receive_offer(&offer, mimes);
+            }
+            // Primary selection changes on every text *highlight*, not every
+            // copy. Capturing it would mean recording everything the user drags
+            // a cursor over, so it stays off.
+            zwlr_data_control_device_v1::Event::PrimarySelection { .. } => {}
+            zwlr_data_control_device_v1::Event::Finished => {
+                state.data_device = None;
+            }
+            _ => {}
+        }
+    }
+
+    smithay_client_toolkit::reexports::client::event_created_child!(Dropkick, ZwlrDataControlDeviceV1, [
+        zwlr_data_control_device_v1::EVT_DATA_OFFER_OPCODE => (ZwlrDataControlOfferV1, ()),
+    ]);
+}
+
+impl Dispatch<ZwlrDataControlOfferV1, ()> for Dropkick {
+    fn event(
+        state: &mut Self,
+        offer: &ZwlrDataControlOfferV1,
+        event: zwlr_data_control_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwlr_data_control_offer_v1::Event::Offer { mime_type } = event {
+            state.offers.entry(offer.id()).or_default().push(mime_type);
+        }
+    }
+}
+
+impl Dispatch<ZwlrDataControlSourceV1, ()> for Dropkick {
+    fn event(
+        state: &mut Self,
+        _: &ZwlrDataControlSourceV1,
+        event: zwlr_data_control_source_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_data_control_source_v1::Event::Send { mime_type: _, fd } => {
+                // Small texts and a reader that is already waiting, so a
+                // blocking write is fine here.
+                let mut file = std::fs::File::from(fd);
+                let _ = file.write_all(state.source_text.as_bytes());
+            }
+            zwlr_data_control_source_v1::Event::Cancelled => {
+                // Someone else took the selection; we are no longer the owner.
+                if let Some(source) = state.source.take() {
+                    source.destroy();
+                }
+                state.source_text.clear();
+            }
+            _ => {}
+        }
+    }
 }
 
 impl CompositorHandler for Dropkick {

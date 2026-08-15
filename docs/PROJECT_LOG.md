@@ -468,6 +468,57 @@ need, and the answer is to yank the buffer to the system clipboard: one key, no
 dialog, paste it wherever you want. No file picker enters the project. Build it
 alongside the Clipboard tool.
 
+## BUILT 2026-08-15 — Clipboard
+
+The flagship, and the first tool where a bug leaks secrets rather than losing a
+note. The four rules went in with the first commit rather than being retrofitted:
+
+1. **Masked on arrival.** `on_enter()` re-masks every time the tool becomes
+   active *and* on every summon. The first keypress reveals and is consumed
+   doing nothing else, so a masked list cannot be navigated, pasted from or
+   deleted from blind. `Esc` is routed by the app layer and never reaches the
+   tool, so it can never be the key that reveals.
+2. **Password-manager hints obeyed.** Any offer carrying
+   `x-kde-passwordManagerHint` is dropped, matched as a substring so a
+   `: secret` suffix still counts.
+3. **Session-only.** History is in memory. Nothing reaches disk.
+4. **`c` pauses capture, `x` clears unpinned, `nuke()` takes everything.**
+
+Verified live against cosmic-comp:
+
+- Background capture works from Rust, not just the Python spike: three copies
+  logged at exactly 34, 21 and 23 bytes.
+- **The startup capture is real.** The daemon recorded a 295-byte entry at bind
+  time with no copy involved — the compositor pushing the existing selection,
+  as predicted in finding 3. It is kept: the user did copy it, it is on the
+  clipboard now, and the password-hint check applies to it identically because
+  the MIME list arrives with the offer.
+- **The write path is verified by the read path.** `--set-clipboard` creates a
+  real data source; the reading daemon got the exact byte counts back, which
+  means the source served them correctly.
+- **Self-capture guard works.** Taking ownership of the selection sends the
+  selection event straight back; reading it would mean writing and reading one
+  pipe on a single thread, which deadlocks once the text exceeds the pipe
+  buffer. `skip_next_selection` suppresses it — verified by a process setting a
+  30-byte selection and logging no capture of its own text.
+
+Reads never block the event loop: the compositor gets a pipe, and the far end is
+registered as a calloop source read to EOF, capped at 4MB against a source that
+streams forever.
+
+`DROPKICK_DEBUG=1` logs captures as **length and MIME count only, never
+content** — a debug flag that printed clipboard text into a terminal scrollback
+would undo the point of the tool.
+
+Also built: **`y` in the Scratchpad yanks the buffer to the system clipboard**,
+which is the no-file-picker answer to "no way to save what I'd written". Core
+never touches a system clipboard itself; it raises an `app::Request` that the
+platform carries out.
+
+Deferred deliberately: **persistence**. Session-only is the default anyway, and
+encrypted pinned entries depend on the unresolved keyring/D-Bus choice. Nothing
+about the storage decisions changes; they are simply not implemented yet.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
