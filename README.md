@@ -30,7 +30,7 @@ you used last, with your values still in it, and the tools sit as tabs across th
 top. So the common case costs nothing:
 
 ```
-Super+D 437*1.18        you were already in the calculator
+Super+D 437*1.18        you were already in the calculator (alt+e)
 ```
 
 Switching tools is `Alt+Q`, `Alt+W`, `Alt+E`… — the top key row maps
@@ -39,7 +39,8 @@ tab. `Alt`, not `Shift`, because `Shift+Q` is the letter `Q` and would be
 swallowed by the tab bar the moment you started a note with it.
 
 `Esc` always means "up one level": leave insert mode, leave the tool, dismiss.
-Double-`Esc` dismisses from anywhere.
+Double-`Esc` dismisses from anywhere. `Ctrl+C` is a full alias for `Esc` — some
+terminals swallow `Esc`, and the habit sticks.
 
 ## The rules
 
@@ -212,9 +213,9 @@ and a key never moves once assigned:
 
 | key | tool | |
 |---|---|---|
-| `Alt+Q` | Calculator | built — expressions, units, date maths |
-| `Alt+W` | Scratchpad | built — notes, text transforms |
-| `Alt+E` | Clipboard | built — history, search, pinning |
+| `Alt+Q` | Scratchpad | built — notes, text transforms |
+| `Alt+W` | Clipboard | built — history, search, pinning |
+| `Alt+E` | Calculator | built — expressions, units, date maths |
 | `Alt+R` | Calendar | planned |
 | `Alt+T` | Timer/Stopwatch | planned |
 | `Alt+Y` | Generate | planned — passwords, UUIDs, hashes |

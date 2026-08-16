@@ -37,9 +37,9 @@ pub struct Tool {
 /// deliberately left unspent. Keys never move and retired keys stay retired, so
 /// this table is the one thing in Dropkick that must not be casually edited.
 pub const TOOLS: [Tool; 7] = [
-    Tool { id: ToolId::Calculator, name: "Calculator", key: 'q', built: true },
-    Tool { id: ToolId::Scratchpad, name: "Scratchpad", key: 'w', built: true },
-    Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'e', built: true },
+    Tool { id: ToolId::Scratchpad, name: "Scratchpad", key: 'q', built: true },
+    Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'w', built: true },
+    Tool { id: ToolId::Calculator, name: "Calculator", key: 'e', built: true },
     Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
     Tool { id: ToolId::Timer, name: "Timer", key: 't', built: false },
     Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: false },
@@ -79,7 +79,7 @@ pub struct App {
 impl Default for App {
     fn default() -> Self {
         App {
-            active: ToolId::Calculator,
+            active: ToolId::Scratchpad,
             calculator: Calculator::new(),
             scratchpad: Scratchpad::new(),
             clipboard: Clipboard::new(),
@@ -105,7 +105,7 @@ impl App {
         match self.active {
             ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
-                crate::scratchpad::Mode::Insert => "INSERT   esc command mode",
+                crate::scratchpad::Mode::Insert => "INSERT   esc or ctrl-c leaves",
                 crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  y copy all  hjkl move  esc x",
             },
             ToolId::Clipboard => {
@@ -120,7 +120,7 @@ impl App {
                     }
                 }
             }
-            _ => "not built yet   alt+q calculator   alt+w scratchpad",
+            _ => "not built yet   alt+q scratchpad   alt+w clipboard   alt+e calculator",
         }
     }
 
@@ -158,6 +158,17 @@ impl App {
     }
 
     pub fn on_key(&mut self, press: KeyPress, now_ms: u64) -> Response {
+        // Ctrl+C is a full alias for Esc, not a special case in one tool.
+        // Plenty of terminals swallow Esc, so the habit is common, and an alias
+        // that behaved differently depending on where you were would be worse
+        // than no alias at all. It climbs the same ladder and double-taps the
+        // same way.
+        let press = if press.mods.ctrl && press.key == Key::Char('c') {
+            KeyPress::plain(Key::Escape)
+        } else {
+            press
+        };
+
         // Tab switching is checked before anything else and works identically in
         // every tool and every mode. That uniformity is the whole reason it
         // lives on Alt rather than Shift.
@@ -253,21 +264,21 @@ mod tests {
     #[test]
     fn alt_switches_tools_from_anywhere() {
         let mut app = App::new();
+        assert_eq!(app.active, ToolId::Scratchpad, "first launch lands on the leftmost tool");
+        assert_eq!(app.on_key(KeyPress::alt('e'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Calculator);
-        assert_eq!(app.on_key(KeyPress::alt('w'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Scratchpad);
         assert_eq!(app.on_key(KeyPress::alt('q'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Calculator);
+        assert_eq!(app.active, ToolId::Scratchpad);
     }
 
     #[test]
     fn alt_switches_even_from_insert_mode() {
         // The property Shift could not deliver.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         assert_eq!(app.scratchpad.mode, Mode::Insert);
-        app.on_key(KeyPress::alt('q'), 0);
+        app.on_key(KeyPress::alt('e'), 0);
         assert_eq!(app.active, ToolId::Calculator);
         // ...and the notepad is left exactly as it was.
         assert_eq!(app.scratchpad.mode, Mode::Insert);
@@ -278,7 +289,7 @@ mod tests {
         // Regression guard for the decision itself: typing a capital Q into a
         // note must never change tools.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "Quick note".chars() {
             app.on_key(KeyPress::ch(c), 0);
@@ -290,15 +301,16 @@ mod tests {
     #[test]
     fn switching_preserves_both_tools_state() {
         let mut app = App::new();
+        app.on_key(KeyPress::alt('e'), 0);
         for c in "12*12".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "hello".chars() {
             app.on_key(KeyPress::ch(c), 0);
         }
-        app.on_key(KeyPress::alt('q'), 0);
+        app.on_key(KeyPress::alt('e'), 0);
         assert_eq!(app.calculator.input, "12*12");
         assert_eq!(app.scratchpad.text(), "hello");
     }
@@ -307,14 +319,14 @@ mod tests {
     fn unbuilt_tools_keep_their_key_and_say_so() {
         let mut app = App::new();
         assert_eq!(app.on_key(KeyPress::alt('r'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Calculator);
+        assert_eq!(app.active, ToolId::Scratchpad, "an unbuilt tab must not steal focus");
         assert!(app.notice.as_deref().unwrap().contains("Calendar"));
     }
 
     #[test]
     fn esc_ladder_climbs_one_level_at_a_time() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         // insert -> command
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
@@ -326,7 +338,7 @@ mod tests {
     #[test]
     fn double_esc_dismisses_from_the_deepest_level() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1100), Response::Dismiss);
@@ -335,7 +347,7 @@ mod tests {
     #[test]
     fn slow_double_esc_is_two_separate_escapes() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
         // Well beyond the window: this is "leave the tool", which from command
@@ -352,11 +364,11 @@ mod tests {
     #[test]
     fn cycling_steps_between_built_tools() {
         let mut app = App::new();
-        assert_eq!(app.active, ToolId::Calculator);
-        assert_eq!(app.on_key(KeyPress::alt('l'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Scratchpad);
+        assert_eq!(app.on_key(KeyPress::alt('l'), 0), Response::Redraw);
+        assert_eq!(app.active, ToolId::Clipboard);
         assert_eq!(app.on_key(KeyPress::alt('h'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Calculator);
+        assert_eq!(app.active, ToolId::Scratchpad);
     }
 
     #[test]
@@ -365,19 +377,19 @@ mod tests {
         // index step would land on a dead tab.
         let mut app = App::new();
         app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Scratchpad);
-        app.on_key(KeyPress::alt('l'), 0);
         assert_eq!(app.active, ToolId::Clipboard);
         app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Calculator, "should wrap past the unbuilt tail");
+        assert_eq!(app.active, ToolId::Calculator);
+        app.on_key(KeyPress::alt('l'), 0);
+        assert_eq!(app.active, ToolId::Scratchpad, "should wrap past the unbuilt tail");
         app.on_key(KeyPress::alt('h'), 0);
-        assert_eq!(app.active, ToolId::Clipboard, "should wrap backwards past the tail");
+        assert_eq!(app.active, ToolId::Calculator, "should wrap backwards past the tail");
     }
 
     #[test]
     fn cycling_works_from_inside_insert_mode() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         app.on_key(KeyPress::alt('l'), 0);
         assert_eq!(app.active, ToolId::Clipboard);
@@ -387,7 +399,7 @@ mod tests {
     fn plain_h_and_l_still_move_the_cursor() {
         // Regression guard: cycling must not steal the Scratchpad's motions.
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "hello".chars() {
             app.on_key(KeyPress::ch(c), 0);
@@ -402,14 +414,14 @@ mod tests {
     fn arriving_at_the_clipboard_always_masks_it() {
         let mut app = App::new();
         app.clipboard.record("secret token", &[]);
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         assert_eq!(app.active, ToolId::Clipboard);
         assert!(!app.clipboard.revealed);
         // reveal, leave, come back
         app.on_key(KeyPress::ch('j'), 0);
         assert!(app.clipboard.revealed);
-        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         assert!(!app.clipboard.revealed, "returning must re-mask");
     }
 
@@ -417,7 +429,7 @@ mod tests {
     fn a_summon_re_masks_even_without_switching() {
         let mut app = App::new();
         app.clipboard.record("secret token", &[]);
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('j'), 0);
         assert!(app.clipboard.revealed);
         app.on_summon();
@@ -428,7 +440,7 @@ mod tests {
     fn esc_dismisses_a_masked_clipboard_without_revealing_it() {
         let mut app = App::new();
         app.clipboard.record("secret token", &[]);
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 0), Response::Dismiss);
         assert!(!app.clipboard.revealed, "Esc must never be the key that reveals");
     }
@@ -437,7 +449,7 @@ mod tests {
     fn pasting_asks_the_platform_and_dismisses() {
         let mut app = App::new();
         app.clipboard.record("postgres://localhost", &[]);
-        app.on_key(KeyPress::alt('e'), 0);
+        app.on_key(KeyPress::alt('w'), 0);
         app.on_key(KeyPress::ch('j'), 0); // reveal
         assert_eq!(app.on_key(KeyPress::plain(Key::Enter), 0), Response::Dismiss);
         assert_eq!(
@@ -449,7 +461,7 @@ mod tests {
     #[test]
     fn scratchpad_yank_asks_the_platform() {
         let mut app = App::new();
-        app.on_key(KeyPress::alt('w'), 0);
+        app.on_key(KeyPress::alt('q'), 0);
         app.on_key(KeyPress::ch('i'), 0);
         for c in "note to self".chars() {
             app.on_key(KeyPress::ch(c), 0);
@@ -457,6 +469,40 @@ mod tests {
         app.on_key(KeyPress::plain(Key::Escape), 0);
         app.on_key(KeyPress::ch('y'), 0);
         assert_eq!(app.pending, vec![Request::SetClipboard("note to self".to_string())]);
+    }
+
+    #[test]
+    fn ctrl_c_leaves_insert_mode_like_esc() {
+        let mut app = App::new();
+        app.on_key(KeyPress::ch('i'), 0);
+        assert_eq!(app.scratchpad.mode, crate::scratchpad::Mode::Insert);
+        let ctrl_c = KeyPress::ctrl('c');
+        assert_eq!(app.on_key(ctrl_c, 0), Response::Redraw);
+        assert_eq!(app.scratchpad.mode, crate::scratchpad::Mode::Command);
+    }
+
+    #[test]
+    fn ctrl_c_climbs_the_whole_ladder_and_double_taps() {
+        let mut app = App::new();
+        let ctrl_c = KeyPress::ctrl('c');
+        app.on_key(KeyPress::ch('i'), 0);
+        assert_eq!(app.on_key(ctrl_c, 1000), Response::Redraw); // insert -> command
+        assert_eq!(app.on_key(ctrl_c, 1100), Response::Dismiss); // double tap
+        // ...and mixing the two works, because they are the same key.
+        app.on_key(KeyPress::ch('i'), 2000);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 3000), Response::Redraw);
+        assert_eq!(app.on_key(ctrl_c, 3100), Response::Dismiss);
+    }
+
+    #[test]
+    fn plain_c_is_still_text_in_insert_mode() {
+        let mut app = App::new();
+        app.on_key(KeyPress::ch('i'), 0);
+        for c in "code".chars() {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        assert_eq!(app.scratchpad.text(), "code");
+        assert_eq!(app.scratchpad.mode, crate::scratchpad::Mode::Insert);
     }
 
     #[test]

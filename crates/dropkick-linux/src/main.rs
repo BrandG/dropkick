@@ -753,7 +753,7 @@ fn shots(prefix: &str) -> std::io::Result<()> {
         (
             "scratchpad-insert",
             Box::new(|app: &mut App| {
-                app.on_key(KeyPress::alt('w'), 0);
+                app.on_key(KeyPress::alt('q'), 0);
                 app.on_key(KeyPress::ch('i'), 0);
                 for c in "call Frank re: staging server".chars() {
                     app.on_key(KeyPress::ch(c), 0);
@@ -767,7 +767,7 @@ fn shots(prefix: &str) -> std::io::Result<()> {
         (
             "scratchpad-command",
             Box::new(|app: &mut App| {
-                app.on_key(KeyPress::alt('w'), 0);
+                app.on_key(KeyPress::alt('q'), 0);
                 app.on_key(KeyPress::ch('i'), 0);
                 for c in "Quick note: Shift+Q types a Q".chars() {
                     app.on_key(KeyPress::ch(c), 0);
@@ -781,7 +781,7 @@ fn shots(prefix: &str) -> std::io::Result<()> {
         (
             "scratchpad-wrap",
             Box::new(|app: &mut App| {
-                app.on_key(KeyPress::alt('w'), 0);
+                app.on_key(KeyPress::alt('q'), 0);
                 app.on_key(KeyPress::ch('i'), 0);
                 let para = "Word wrap matters more than it sounds: without it a long \
 thought runs off the right edge and the rest of the sentence is simply gone, which \
@@ -797,14 +797,14 @@ break it did not have.";
             "clipboard-masked",
             Box::new(|app: &mut App| {
                 seed_clipboard(app);
-                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::alt('w'), 0);
             }),
         ),
         (
             "clipboard-revealed",
             Box::new(|app: &mut App| {
                 seed_clipboard(app);
-                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::alt('w'), 0);
                 app.on_key(KeyPress::ch('j'), 0); // first key only reveals
                 app.on_key(KeyPress::ch('j'), 0);
                 app.on_key(KeyPress::ch('p'), 0); // pin the selection
@@ -814,7 +814,7 @@ break it did not have.";
             "clipboard-search",
             Box::new(|app: &mut App| {
                 seed_clipboard(app);
-                app.on_key(KeyPress::alt('e'), 0);
+                app.on_key(KeyPress::alt('w'), 0);
                 app.on_key(KeyPress::ch('j'), 0);
                 app.on_key(KeyPress::ch('/'), 0);
                 for c in "postgres".chars() {

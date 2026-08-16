@@ -58,4 +58,8 @@ impl KeyPress {
     pub fn ch(c: char) -> Self {
         KeyPress::plain(Key::Char(c))
     }
+
+    pub fn ctrl(c: char) -> Self {
+        KeyPress { key: Key::Char(c), mods: Mods { ctrl: true, alt: false, shift: false } }
+    }
 }

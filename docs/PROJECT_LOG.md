@@ -556,6 +556,36 @@ Lesson worth keeping: **a comment asserting an invariant is not the invariant.**
 The reasoning in that comment was sound; the code just did not implement it, and
 nothing checked.
 
+## ROSTER REORDERED + CTRL+C ALIAS — 2026-08-15 (user)
+
+**Order is now Scratchpad `q`, Clipboard `w`, Calculator `e`.** Calendar, Timer,
+Generate and Color keep `r t y u`; `i o p` stay unspent. First launch lands on
+Scratchpad rather than Calculator; after that, resume decides.
+
+This **moves keys that were already assigned**, which the permanence rule
+forbids. It is allowed exactly once, here, because the rule exists to protect
+muscle memory and there is none yet — two days in, one user, a handful of
+sessions. Doing it now costs an afternoon of test churn. Doing it in a month
+costs the thing the rule protects. **From here the rule binds:** the reason to
+reorder was "Scratchpad will get the most use", and that reason will still be
+true later without justifying a second reshuffle.
+
+The alternative — keeping keys and only reordering the *display* — was rejected
+because it breaks the reason the top row was chosen at all: the keyboard's
+left-to-right order mapping onto the tabs. Tabs reading `w e q` would make the
+keys arbitrary.
+
+**`Ctrl+C` is a full alias for `Esc`**, requested because terminals that swallow
+`Esc` make it a common habit. Implemented at the top of `App::on_key` by
+rewriting the press, so it is genuinely the same key rather than a special case
+in one tool: it climbs the same ladder, participates in the same double-tap, and
+mixes freely with `Esc` (one of each in quick succession still dismisses). A
+scratchpad-only alias was rejected — an alias that behaves differently depending
+on where you are is worse than no alias.
+
+Plain `c` is unaffected: it is text in insert mode and pauses capture in the
+Clipboard, because `Mods::is_plain()` excludes ctrl.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
