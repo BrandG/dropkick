@@ -131,6 +131,7 @@ struct Dropkick {
     handle: LoopHandle<'static, Dropkick>,
 
     app: App,
+    config: dropkick_core::Config,
     text: TextRenderer,
     big: TextRenderer,
     /// Live while the timer runs, dropped when it stops.
@@ -173,6 +174,20 @@ impl Dropkick {
     /// rather than once at startup - that is a protocol requirement, not
     /// defensiveness.
     fn show(&mut self) {
+        self.show_with(KeyboardInteractivity::Exclusive);
+    }
+
+    /// Show the panel because a timer went off, rather than because the user
+    /// asked. `OnDemand` is the whole point: the panel appears and stays, but
+    /// does not take the keyboard, so an alarm arriving mid-sentence cannot
+    /// swallow what you were typing into something else. Click it, or press the
+    /// summon key, to interact.
+    fn show_for_alarm(&mut self) {
+        self.app.active = dropkick_core::app::ToolId::Timer;
+        self.show_with(KeyboardInteractivity::OnDemand);
+    }
+
+    fn show_with(&mut self, interactivity: KeyboardInteractivity) {
         if self.phase != Phase::Hidden {
             return;
         }
@@ -200,7 +215,7 @@ impl Dropkick {
         if let Some(layer) = self.layer.as_ref() {
             layer.set_size(WIDTH, HEIGHT);
             layer.set_anchor(Anchor::TOP);
-            layer.set_keyboard_interactivity(KeyboardInteractivity::Exclusive);
+            layer.set_keyboard_interactivity(interactivity);
             layer.commit();
         }
         self.phase = Phase::Mapping;
@@ -412,7 +427,7 @@ impl Dropkick {
                 mimes.len()
             );
         }
-        if kept && self.phase != Phase::Hidden {
+        if kept && self.phase == Phase::Visible {
             let qh = self.qh.clone();
             self.draw(&qh);
         }
@@ -483,19 +498,30 @@ impl Dropkick {
             );
         }
         if self.app.timer.tick(now) {
-            self.notify_timer_finished();
+            if self.config.timer_notify {
+                self.notify_timer_finished();
+            }
+            // A notification in the corner is missable by design; it is meant
+            // to be glanceable, not insistent. For an alarm the panel itself
+            // shows up too, which is the one alert Dropkick can make that does
+            // not depend on the user happening to look at the right corner.
+            if self.config.timer_show_panel && self.phase == Phase::Hidden {
+                self.show_for_alarm();
+            }
         }
         if !self.app.timer.is_running() {
             self.tick_token = None;
             // One last paint so a visible panel shows 0:00 rather than freezing
-            // a tenth short of it.
-            if self.phase != Phase::Hidden {
+            // a tenth short of it. Only when *Visible*: a surface still in
+            // Mapping has not had its configure acked, and attaching a buffer
+            // before that is a protocol error that kills the connection.
+            if self.phase == Phase::Visible {
                 let qh = self.qh.clone();
                 self.draw(&qh);
             }
             return TimeoutAction::Drop;
         }
-        if self.phase != Phase::Hidden {
+        if self.phase == Phase::Visible {
             let qh = self.qh.clone();
             self.draw(&qh);
             TimeoutAction::ToDuration(Duration::from_millis(100))
@@ -511,7 +537,13 @@ impl Dropkick {
         // the life of the daemon. The handshake costs a millisecond or two and
         // these are rare.
         match dropkick_linux::dbus::Bus::session()
-            .and_then(|mut bus| bus.notify("Dropkick timer finished", &body))
+            .and_then(|mut bus| {
+                bus.notify(
+                    "Dropkick timer finished",
+                    &body,
+                    dropkick_linux::dbus::Alert::Alarm { sound: self.config.timer_sound },
+                )
+            })
         {
             Ok(id) => {
                 if std::env::var_os("DROPKICK_DEBUG").is_some() {
@@ -614,7 +646,7 @@ fn main() {
     #[cfg(feature = "dbus")]
     if let Some(i) = args.iter().position(|a| a == "--notify") {
         let text = args.get(i + 1).cloned().unwrap_or_else(|| "test".to_string());
-        match dropkick_linux::dbus::Bus::session().and_then(|mut b| b.notify("Dropkick", &text)) {
+        match dropkick_linux::dbus::Bus::session().and_then(|mut b| b.notify("Dropkick", &text, dropkick_linux::dbus::Alert::Alarm { sound: true })) {
             Ok(id) => println!("dropkickd: notification {id} posted"),
             Err(e) => {
                 eprintln!("dropkickd: notify failed: {e}");
@@ -635,6 +667,8 @@ fn main() {
         Some(v) if v == "remap" => Strategy::Remap,
         _ => Strategy::Recreate,
     };
+
+    let config = dropkick_linux::settings::load();
 
     let (text, big) = match (TextRenderer::new(16.0), TextRenderer::new(58.0)) {
         (Ok(t), Ok(b)) => (t, b),
@@ -688,6 +722,7 @@ fn main() {
         keyboard: None,
         handle: handle.clone(),
         app: App::new(),
+        config,
         text,
         big,
         tick_token: None,

@@ -17,12 +17,14 @@
 pub mod app;
 pub mod calculator;
 pub mod clipboard;
+pub mod config;
 pub mod key;
 pub mod scratchpad;
 pub mod text;
 pub mod timer;
 
 pub use app::{App, Request, Response, ToolId, TOOLS};
+pub use config::Config;
 pub use key::{Key, KeyPress, Mods};
 
 /// Version reported by `Help -> version`. Dropkick never checks this against a

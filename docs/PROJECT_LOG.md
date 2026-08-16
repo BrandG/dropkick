@@ -669,6 +669,63 @@ arriving. Absence of an error looks identical to never having run.
 Stopwatch moved to `w`. The rule worth keeping: **a key that is both a unit and
 a command will silently do the wrong one.**
 
+## ALARMS MADE HARD TO MISS + SETTINGS — 2026-08-16 (user)
+
+First real use of the timer: "a tiny box in the upper right corner that
+disappeared before I could even read it... if I'm not watching for it, I will
+miss it every time." Clicking it did nothing.
+
+Cause: the first implementation passed **no hints at all** and `expire_timeout =
+-1`, meaning "server decides", and the server decides on a few seconds. That is
+right for *copied to clipboard* and useless for *your timer went off*.
+
+`GetCapabilities` on `cosmic-notifications` reports `body, icon-static,
+persistence, actions, action-icons, body-markup, body-hyperlinks, sound` — three
+of which were going unused. Now:
+
+- **urgency = 2 (critical)** and **expire_timeout = 0**, so it stays until
+  dismissed. Confirmed by the user: "that one waited for closure".
+- **`sound-name = alarm-clock-elapsed`**, the XDG sound naming spec's name for
+  exactly this event.
+- **The panel itself appears**, which is the only alert Dropkick can raise that
+  does not depend on someone watching the right corner.
+
+The panel maps with `KeyboardInteractivity::OnDemand`, not `Exclusive`. An alarm
+that stole the keyboard mid-sentence would eat what you were typing into
+something else — the alert must be impossible to miss and impossible to have
+damaged anything.
+
+Clicking the notification still does nothing: that needs declared actions and
+the `ActionInvoked` signal, which the D-Bus client does not do yet. Same missing
+piece as `PickColor`.
+
+### Settings exist now
+
+Sound is the second thing wanting a switch (notifications were the first), so
+the config file is real:
+
+`~/.config/dropkick/config`, plain `key = value`, written with every option and
+an explanatory comment on **first run** — options discoverable by opening the
+file rather than by reading documentation. Parsing lives in core and is tested;
+only the path and the IO are in the platform crate. No TOML, no serde, no
+dependency.
+
+**Unrecognised keys are reported at startup, never ignored.** A settings file
+that silently swallows `timer.sond = false` is worse than having no settings,
+because it looks like it worked. There is a test asserting the shipped default
+file itself parses clean, so the file written on first run cannot drift from
+what the program does.
+
+### And a protocol error, caught by the alarm path
+
+Showing the panel from the tick handler killed the Wayland connection:
+`must ack the initial configure before attaching buffer`. Three draw sites
+guarded on `phase != Hidden`, but `Mapping` means the surface exists and has
+*not* been configured yet; drawing then is a protocol violation. Now they guard
+on `phase == Visible`. The clipboard capture path had the same latent bug — a
+capture completing during the map window would have killed the connection the
+same way, intermittently and for no visible reason.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

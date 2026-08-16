@@ -110,6 +110,26 @@ impl Encoder {
         self.string(s);
     }
 
+    pub fn variant_byte(&mut self, v: u8) {
+        self.signature("y");
+        self.byte(v);
+    }
+
+    /// One `{sv}` pair. Dict entries align to 8, same as structs.
+    pub fn dict_entry_string(&mut self, key: &str, value: &str) {
+        self.structure(|e| {
+            e.string(key);
+            e.variant_string(value);
+        });
+    }
+
+    pub fn dict_entry_byte(&mut self, key: &str, value: u8) {
+        self.structure(|e| {
+            e.string(key);
+            e.variant_byte(value);
+        });
+    }
+
     /// ARRAY: a 4-byte byte-count, then padding to the *element's* alignment,
     /// then the elements. The padding is required even when the array is
     /// empty, which is the single most common D-Bus encoding bug.
@@ -133,6 +153,17 @@ impl Encoder {
 
 fn read_u32_le(b: &[u8]) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+/// How hard a notification should try to be noticed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Alert {
+    /// Normal urgency, server-chosen timeout, no sound.
+    Info,
+    /// Critical urgency, stays until dismissed. `sound` asks the server to
+    /// play the alarm sound too, which is a setting because whether an alert
+    /// should make noise is not something software gets to decide for someone.
+    Alarm { sound: bool },
 }
 
 pub struct Bus {
@@ -300,7 +331,13 @@ impl Bus {
     }
 
     /// Post a desktop notification. Returns the server's notification id.
-    pub fn notify(&mut self, summary: &str, body_text: &str) -> io::Result<u32> {
+    ///
+    /// The default notification is a box in the corner that vanishes in a few
+    /// seconds, which is fine for "copied" and useless for "your timer went
+    /// off". [`Alert::Alarm`] asks for the three things that change that, all
+    /// of which this machine's server advertises: critical urgency, no
+    /// auto-dismiss, and a sound.
+    pub fn notify(&mut self, summary: &str, body_text: &str, alert: Alert) -> io::Result<u32> {
         let mut b = Encoder::new();
         b.string("Dropkick"); // app_name
         b.u32(0); // replaces_id
@@ -308,8 +345,24 @@ impl Bus {
         b.string(summary);
         b.string(body_text);
         b.array(4, |_| {}); // actions: as, empty
-        b.array(8, |_| {}); // hints: a{sv}, empty - note the 8-byte padding
-        b.i32(-1); // expire_timeout: server default
+        b.array(8, |hints| match alert {
+            Alert::Info => {}
+            Alert::Alarm { sound } => {
+                // 2 = critical. Servers keep critical notifications on screen
+                // rather than expiring them.
+                hints.dict_entry_byte("urgency", 2);
+                if sound {
+                    // From the XDG sound naming spec; the name for exactly this.
+                    hints.dict_entry_string("sound-name", "alarm-clock-elapsed");
+                }
+            }
+        });
+        // 0 means "never expire on your own"; -1 would mean "server decides",
+        // and the server decides on a few seconds.
+        b.i32(match alert {
+            Alert::Info => -1,
+            Alert::Alarm { .. } => 0,
+        });
 
         let reply = self.call(
             "org.freedesktop.Notifications",
@@ -475,6 +528,20 @@ mod tests {
         let out = b.into_bytes();
         assert_eq!(&out[out.len() - 4..], &(-1i32).to_le_bytes());
         assert!(out.len() > 40);
+    }
+
+    #[test]
+    fn alarm_hints_encode_as_a_populated_dict() {
+        let mut e = Encoder::new();
+        e.array(8, |h| {
+            h.dict_entry_byte("urgency", 2);
+            h.dict_entry_string("sound-name", "alarm-clock-elapsed");
+        });
+        let out = e.into_bytes();
+        let declared = u32::from_le_bytes([out[0], out[1], out[2], out[3]]) as usize;
+        assert!(declared > 0, "an alarm must not send an empty hint dict");
+        // Length counts elements only, and the elements begin 8-aligned.
+        assert_eq!(declared, out.len() - 8);
     }
 
     #[test]
