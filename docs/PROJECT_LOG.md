@@ -743,6 +743,25 @@ on `phase == Visible`. The clipboard capture path had the same latent bug — a
 capture completing during the map window would have killed the connection the
 same way, intermittently and for no visible reason.
 
+## SETTINGS RELOAD ON SUMMON — 2026-08-16 (user)
+
+Settings were read once, at daemon startup, and never again. Since
+`dropkickctl` auto-starts the daemon and it can live for days, editing the file
+did effectively nothing — the worst kind of bug, because it looks like the
+setting does not work rather than like the program did not read it.
+
+Now checked on **every summon**, which is the user's own suggestion and the
+right hook: it is the moment the user is present, it needs no timer, no inotify
+and no reload verb on the control socket, and there is nothing to remember.
+
+A `stat` guards the read, so the file is only parsed when its mtime moves.
+Measured against the previous build: `poke -> FOCUS` 0.56ms median versus
+0.48ms, inside run-to-run noise on a budget of ~1.6ms end to end.
+
+The reload also sets the panel's notice line rather than only printing to
+stderr. Launched from a keybinding there is no terminal, and a setting that
+applies silently is indistinguishable from one that did not.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

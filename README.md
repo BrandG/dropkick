@@ -102,8 +102,12 @@ in, not something Dropkick introduces.
 
 `~/.config/dropkick/config`, written with every option and a comment on first
 run. Plain `key = value`; `#` starts a comment. A key Dropkick does not
-recognise is reported at startup rather than ignored, so a typo cannot quietly
-look like it worked.
+recognise is reported rather than ignored, so a typo cannot quietly look like it
+worked.
+
+Edits apply on the **next summon** — the file is checked every time the panel
+opens, and re-read only when it has actually changed. There is nothing to
+restart and no reload command to remember.
 
 ```
 timer.notify = true      # notify when a countdown finishes

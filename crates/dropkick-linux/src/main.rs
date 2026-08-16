@@ -131,7 +131,7 @@ struct Dropkick {
     handle: LoopHandle<'static, Dropkick>,
 
     app: App,
-    config: dropkick_core::Config,
+    settings: dropkick_linux::settings::Settings,
     text: TextRenderer,
     big: TextRenderer,
     /// Live while the timer runs, dropped when it stops.
@@ -196,6 +196,15 @@ impl Dropkick {
         if self.phase != Phase::Hidden {
             return;
         }
+        // Pick up an edited settings file. A stat, and a read only when the
+        // file actually moved.
+        if self.settings.reload_if_changed() {
+            // Say so in the panel, not just on stderr: launched from a
+            // keybinding there is no terminal to print to, and a setting that
+            // applies silently is indistinguishable from one that did not.
+            self.app.notice = Some("settings reloaded".to_string());
+        }
+
         self.cycle_id += 1;
         let id = self.cycle_id;
         self.cycle = Some(Cycle::new());
@@ -503,14 +512,14 @@ impl Dropkick {
             );
         }
         if self.app.timer.tick(now) {
-            if self.config.timer_notify {
+            if self.settings.config.timer_notify {
                 self.notify_timer_finished();
             }
             // A notification in the corner is missable by design; it is meant
             // to be glanceable, not insistent. For an alarm the panel itself
             // shows up too, which is the one alert Dropkick can make that does
             // not depend on the user happening to look at the right corner.
-            if self.config.timer_show_panel && self.phase == Phase::Hidden {
+            if self.settings.config.timer_show_panel && self.phase == Phase::Hidden {
                 self.show_for_alarm();
             }
         }
@@ -546,7 +555,7 @@ impl Dropkick {
                 bus.notify(
                     "Dropkick timer finished",
                     &body,
-                    dropkick_linux::dbus::Alert::Alarm { sound: self.config.timer_sound },
+                    dropkick_linux::dbus::Alert::Alarm { sound: self.settings.config.timer_sound },
                 )
             })
         {
@@ -673,7 +682,7 @@ fn main() {
         _ => Strategy::Recreate,
     };
 
-    let config = dropkick_linux::settings::load();
+    let settings = dropkick_linux::settings::Settings::load();
 
     let (text, big) = match (TextRenderer::new(16.0), TextRenderer::new(58.0)) {
         (Ok(t), Ok(b)) => (t, b),
@@ -727,7 +736,7 @@ fn main() {
         keyboard: None,
         handle: handle.clone(),
         app: App::new(),
-        config,
+        settings,
         text,
         big,
         tick_token: None,
