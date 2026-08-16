@@ -108,7 +108,7 @@ look like it worked.
 ```
 timer.notify = true      # notify when a countdown finishes
 timer.sound = true       # ask the server to play a sound with it
-timer.show_panel = true  # bring the panel up too (without taking the keyboard)
+timer.show_panel = false # also bring the panel up (off: it covers the screen)
 ```
 
 ## Where your data lives
@@ -259,10 +259,14 @@ everything unpinned, `c` pauses capture, `m` hides it again.
 Timer takes a duration and starts: `25m`, `90`, `1h30m`, `2m30s` — a bare number
 is seconds. `Enter` arms it, `space` starts and pauses, `w` runs a stopwatch
 instead, `r` resets. It keeps counting while Dropkick is hidden and posts a
-desktop notification when it finishes — a critical one, which stays until you
-dismiss it rather than vanishing in three seconds — and brings the panel up too.
-The panel appears *without* taking the keyboard, so an alarm arriving mid-
-sentence cannot swallow what you were typing somewhere else.
+desktop notification when it finishes — a critical one, which waits until you
+dismiss it rather than vanishing in three seconds, with a sound. Both of those
+are settings.
+
+It can also bring the panel up, which is off by default: it does not take the
+keyboard, but it does cover the top of the screen, and a notification that waits
+for you is usually enough. Turn on `timer.show_panel` if you want an alarm that
+is unmissable rather than merely patient.
 
 Scratchpad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
 mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes, `y` copies

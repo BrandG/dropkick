@@ -17,14 +17,18 @@ pub struct Config {
     pub timer_notify: bool,
     /// Ask the notification server to play the alarm sound.
     pub timer_sound: bool,
-    /// Bring the panel up when a countdown finishes. It appears without taking
-    /// the keyboard, so it cannot swallow what you were typing elsewhere.
+    /// Bring the panel up when a countdown finishes.
+    ///
+    /// Off by default. It does not take the keyboard — measured — but it does
+    /// cover the top of the screen, and a critical notification already waits
+    /// for you, so the panel is redundant noise for most people. Available for
+    /// anyone who wants the alarm to be unmissable rather than merely patient.
     pub timer_show_panel: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { timer_notify: true, timer_sound: true, timer_show_panel: true }
+        Config { timer_notify: true, timer_sound: true, timer_show_panel: false }
     }
 }
 
@@ -81,9 +85,11 @@ timer.notify = true
 # Ask the notification server to play a sound with it.
 timer.sound = true
 
-# Also bring the panel up when a countdown finishes. It appears without
-# taking the keyboard, so it cannot swallow what you are typing elsewhere.
-timer.show_panel = true
+# Also bring the panel up when a countdown finishes. It does not take the
+# keyboard, but it does cover the top of the screen, and the notification
+# above already waits for you. Turn it on if you want the alarm to be
+# unmissable rather than merely patient.
+timer.show_panel = false
 "
     }
 }
@@ -104,7 +110,20 @@ mod tests {
         let (c, unknown) = Config::parse("timer.sound = false\ntimer.notify = false");
         assert!(!c.timer_sound);
         assert!(!c.timer_notify);
-        assert!(c.timer_show_panel, "untouched settings keep their default");
+        assert!(unknown.is_empty());
+    }
+
+    #[test]
+    fn untouched_settings_keep_their_defaults() {
+        let (c, _) = Config::parse("timer.sound = false");
+        assert!(c.timer_notify, "notify is on by default");
+        assert!(!c.timer_show_panel, "the panel is off by default");
+    }
+
+    #[test]
+    fn the_panel_can_be_turned_on() {
+        let (c, unknown) = Config::parse("timer.show_panel = true");
+        assert!(c.timer_show_panel);
         assert!(unknown.is_empty());
     }
 

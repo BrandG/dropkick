@@ -687,8 +687,15 @@ of which were going unused. Now:
   dismissed. Confirmed by the user: "that one waited for closure".
 - **`sound-name = alarm-clock-elapsed`**, the XDG sound naming spec's name for
   exactly this event.
-- **The panel itself appears**, which is the only alert Dropkick can raise that
-  does not depend on someone watching the right corner.
+- **The panel itself can appear** — `timer.show_panel`, **off by default since
+  2026-08-16 at the user's request**: it covers the top of the screen, and a
+  notification that waits for you is usually enough. Kept as a setting for
+  anyone who wants an alarm that is unmissable rather than merely patient.
+
+  Measured while flipping the default: the alarm panel does **not** take the
+  keyboard. `wl_keyboard.enter` never arrives when it maps with `OnDemand`, so
+  the "cannot swallow what you were typing" property holds. It blocks the view,
+  which is reason enough to default it off.
 
 The panel maps with `KeyboardInteractivity::OnDemand`, not `Exclusive`. An alarm
 that stole the keyboard mid-sentence would eat what you were typing into

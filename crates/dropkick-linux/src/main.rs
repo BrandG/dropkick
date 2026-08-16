@@ -1202,6 +1202,9 @@ impl KeyboardHandler for Dropkick {
         if !self.surface_matches(surface) {
             return;
         }
+        if std::env::var_os("DROPKICK_TRACE").is_some() {
+            eprintln!("  [focus] wl_keyboard.enter - the panel HAS the keyboard");
+        }
         if let Some(c) = self.cycle.as_mut() {
             if c.focused.is_none() {
                 c.focused = Some(c.t0.elapsed());
