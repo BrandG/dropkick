@@ -236,16 +236,28 @@ impl Dropkick {
 
         // A summon that never configures must report, not hang.
         //
-        // "Stalled" means focus never arrived. It does NOT mean the cycle is
-        // still open: an open cycle is the normal state of a panel the user is
-        // currently typing into. Getting this wrong dismissed every working
-        // summon after 1.2s.
+        // What counts as "stalled" depends on what was asked for. A panel the
+        // user summoned should have the keyboard within a millisecond, so no
+        // focus means something went wrong. An alarm panel deliberately asks
+        // for *no* keyboard, so waiting for focus would condemn every one of
+        // them -- which is exactly what happened: the alarm panel appeared and
+        // was killed 1.2s later by its own watchdog.
+        //
+        // An open cycle is not evidence either way: it is the normal state of a
+        // panel someone is typing into.
+        let expects_focus = interactivity == KeyboardInteractivity::Exclusive;
         let h = self.handle.clone();
         let _ = h.insert_source(
             Timer::from_duration(Duration::from_millis(1200)),
             move |_, _, state: &mut Dropkick| {
                 let stalled = state.cycle_id == id
-                    && state.cycle.as_ref().is_some_and(|c| c.focused.is_none());
+                    && state.cycle.as_ref().is_some_and(|c| {
+                        if expects_focus {
+                            c.focused.is_none()
+                        } else {
+                            c.configure.is_none()
+                        }
+                    });
                 if stalled {
                     eprintln!("  [watchdog] summon {id} never completed (phase {:?})", state.phase);
                     state.hide();
