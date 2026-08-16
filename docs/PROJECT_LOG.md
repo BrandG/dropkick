@@ -793,9 +793,11 @@ asking why the obvious one did not work. A workaround for a behaviour nobody
 else has is worse than not having the behaviour.
 
 Consequence worth knowing: a panel that has lost focus cannot receive `Esc`, so
-the summon key dismisses it. Whether it should instead auto-hide on focus loss,
-the way most launchers do, is undecided — leaving it visible suits using the
-Scratchpad as a reference while typing elsewhere.
+the summon key dismisses it. **Settled by the user 2026-08-16:** `Super+D`
+toggling open and closed is fine, and he does not expect to use `Esc` for
+dismissal anyway. So the panel stays visible after losing focus — no auto-hide,
+which also suits keeping the Scratchpad up as a reference while typing
+elsewhere.
 
 ## NEXT
 
