@@ -67,6 +67,18 @@ promised:
   startup, so the process cannot open a network connection even if something
   slipped through. `AF_UNIX` stays permitted — the Wayland connection needs it.
 
+Dropkick talks to D-Bus for desktop notifications, the colour eyedropper, and
+the keyring. That is also `AF_UNIX`, and the client is about 500 lines in this
+repository rather than a dependency. If you would rather not have those
+capabilities at all, build without them:
+
+```
+cargo build --release --no-default-features
+```
+
+The result contains no D-Bus code — something you can check with `strings`
+rather than take on trust.
+
 ## Threat model
 
 Dropkick protects against: casual filesystem inspection, other local users,

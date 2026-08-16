@@ -583,6 +583,53 @@ on where you are is worse than no alias.
 Plain `c` is unaffected: it is text in insert mode and pauses capture in the
 Clipboard, because `Mods::is_plain()` excludes ctrl.
 
+## D-BUS DECIDED AND BUILT — 2026-08-16
+
+**Hand-rolled minimal client.** `crates/dropkick-linux/src/dbus.rs`, ~500 lines,
+behind a `dbus` cargo feature that is on by default.
+
+Rejected alternatives and why:
+
+- **`zbus`** — the mainstream choice, works fine, brings an async runtime and
+  several dozen crates. Note the old "no async runtime" objection was never a
+  real rule (see the correction above), so this was decided on weight, not
+  dogma.
+- **`dbus` crate** — wraps libdbus, so it adds a C library and a system package
+  (`libdbus-1-dev`, needing root to install) to a project whose build currently
+  needs nothing unusual.
+
+Neither threatens the no-networking promise: D-Bus is an `AF_UNIX` socket and
+the planned seccomp filter blocks `AF_INET`/`AF_INET6` only.
+
+What decided it: Dropkick needs **three calls**, not a library — a notification
+for the Timer, `PickColor` for the eyedropper, and a secret for encrypting
+pinned clipboard entries. And hand-rolling makes the capability flag mean
+something checkable. With `--no-default-features` the binary contains no D-Bus
+code at all, verified by inspection:
+
+```
+--no-default-features:  strings | grep -c org.freedesktop.Notifications  ->  0
+default:                                                                ->  1
+```
+
+**The dependency tree did not grow: still 61 crates.**
+
+Verified end to end: `dropkickd --notify "..."` posted a real notification and
+the server returned id 13.
+
+The honest cost is that the marshalling is ours to get right. Alignment and
+padding are where D-Bus implementations fail, so the encoder is tested against
+byte layouts from the specification — 11 tests, including the one that matters
+most: **an empty `a{sv}` still needs its 8-byte padding**, which is the single
+most common D-Bus encoding bug and produces a message the bus rejects with no
+useful diagnostic.
+
+Deliberately absent: signal handling, properties, introspection, object server,
+fd passing. `PickColor` and the secret portal both use the portal
+Request/Response *signal* pattern and will need signal support added; the
+notification path does not, which is why it went first and why the classic
+`org.freedesktop.Notifications` interface was used rather than the portal.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

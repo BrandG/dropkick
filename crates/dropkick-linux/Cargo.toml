@@ -5,6 +5,13 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 
+[features]
+# On by default. Building with --no-default-features produces a binary with no
+# D-Bus code in it at all: no notifications, no eyedropper, no keyring. That is
+# a property you can check by looking, not a setting to be trusted.
+default = ["dbus"]
+dbus = []
+
 [dependencies]
 dropkick-core = { path = "../dropkick-core" }
 smithay-client-toolkit = "0.21"

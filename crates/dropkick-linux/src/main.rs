@@ -529,6 +529,20 @@ fn main() {
         return;
     }
 
+    // Dev-only: prove the D-Bus client end to end.
+    #[cfg(feature = "dbus")]
+    if let Some(i) = args.iter().position(|a| a == "--notify") {
+        let text = args.get(i + 1).cloned().unwrap_or_else(|| "test".to_string());
+        match dropkick_linux::dbus::Bus::session().and_then(|mut b| b.notify("Dropkick", &text)) {
+            Ok(id) => println!("dropkickd: notification {id} posted"),
+            Err(e) => {
+                eprintln!("dropkickd: notify failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
     // Dev-only: take ownership of the selection and hold it, so clipboard
     // capture can be exercised without installing a clipboard utility.
     let set_clipboard: Option<String> = args
