@@ -762,6 +762,38 @@ The reload also sets the panel's notice line rather than only printing to
 stderr. Launched from a keybinding there is no terminal, and a setting that
 applies silently is indistinguishable from one that did not.
 
+## FOCUS: EXCLUSIVE TO ACQUIRE, ON-DEMAND TO HOLD — 2026-08-16
+
+The user opened the panel and could not type into anything else until they
+dismissed it: "no other program pulls focus constantly. Why are we the only
+one?"
+
+Fair, and the answer is that Dropkick is not an ordinary window. It is a
+layer-shell surface on the Overlay layer, the protocol meant for panels, docks
+and lock screens. `KeyboardInteractivity::Exclusive` tells the compositor to
+give it the keyboard and *keep it there*, so clicking another window did
+nothing. The programs that behave this way are the other layer-shell ones —
+rofi, wofi, fuzzel. Ordinary apps are `xdg_toplevel` and get ordinary focus.
+
+Exclusive was not gratuitous: it is what makes a summon 1.6ms end to end, with
+focus landing before the first frame is even committed. But it was being held
+for the whole session rather than just long enough to acquire.
+
+**Now: map Exclusive, then downgrade to `OnDemand` the instant
+`wl_keyboard.enter` arrives.** The fast summon is unchanged — measured 0.43ms
+median to focus, against 0.48ms before — and ordinary behaviour is restored:
+click away and focus leaves, click the panel and it returns.
+
+The first instinct was to add a key that releases the keyboard. That was the
+wrong shape of answer: the user was not asking for a new gesture, they were
+asking why the obvious one did not work. A workaround for a behaviour nobody
+else has is worse than not having the behaviour.
+
+Consequence worth knowing: a panel that has lost focus cannot receive `Esc`, so
+the summon key dismisses it. Whether it should instead auto-hide on focus loss,
+the way most launchers do, is undecided — leaving it visible suits using the
+Scratchpad as a reference while typing elsewhere.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

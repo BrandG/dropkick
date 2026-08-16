@@ -136,6 +136,8 @@ struct Dropkick {
     big: TextRenderer,
     /// Live while the timer runs, dropped when it stops.
     tick_token: Option<RegistrationToken>,
+    /// True between asking for exclusive focus and actually getting it.
+    grabbed_exclusive: bool,
     mods: Mods,
     started: Instant,
 
@@ -233,6 +235,7 @@ impl Dropkick {
             layer.commit();
         }
         self.phase = Phase::Mapping;
+        self.grabbed_exclusive = interactivity == KeyboardInteractivity::Exclusive;
 
         // A summon that never configures must report, not hang.
         //
@@ -752,6 +755,7 @@ fn main() {
         text,
         big,
         tick_token: None,
+        grabbed_exclusive: false,
         mods: Mods::default(),
         started: Instant::now(),
         conn: conn.clone(),
@@ -1229,13 +1233,31 @@ impl KeyboardHandler for Dropkick {
             return;
         }
         if std::env::var_os("DROPKICK_TRACE").is_some() {
-            eprintln!("  [focus] wl_keyboard.enter - the panel HAS the keyboard");
+            eprintln!("  [focus] enter - the panel has the keyboard");
         }
         if let Some(c) = self.cycle.as_mut() {
             if c.focused.is_none() {
                 c.focused = Some(c.t0.elapsed());
             }
         }
+
+        // Now that we HAVE the keyboard, stop demanding it.
+        //
+        // Exclusive is how a layer surface gets focus the instant it maps, with
+        // no click and no window management -- that is what makes a summon
+        // 1.6ms. But exclusive also means the compositor will not let anything
+        // else have the keyboard until we go away, so clicking back to your
+        // editor did nothing. Downgrading to OnDemand the moment focus lands
+        // keeps the fast summon and restores ordinary behaviour: click away and
+        // focus leaves, click the panel and it comes back.
+        if self.grabbed_exclusive {
+            self.grabbed_exclusive = false;
+            if let Some(layer) = self.layer.as_ref() {
+                layer.set_keyboard_interactivity(KeyboardInteractivity::OnDemand);
+                layer.commit();
+            }
+        }
+
         if self.bench {
             self.schedule_bench_hide();
         }
@@ -1246,9 +1268,12 @@ impl KeyboardHandler for Dropkick {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
     ) {
+        if self.surface_matches(surface) && std::env::var_os("DROPKICK_TRACE").is_some() {
+            eprintln!("  [focus] leave - the keyboard went back to something else");
+        }
     }
 
     fn press_key(

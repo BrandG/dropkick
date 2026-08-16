@@ -38,6 +38,13 @@ left-to-right onto the tabs. `Alt+H` and `Alt+L` step to the previous and next
 tab. `Alt`, not `Shift`, because `Shift+Q` is the letter `Q` and would be
 swallowed by the tab bar the moment you started a note with it.
 
+Dropkick takes the keyboard when it appears, so you can type immediately, and
+then hands it straight back the moment you click something else. It is a
+layer-shell surface rather than an ordinary window — that is what lets it map
+instantly, above everything, with no click and no taskbar entry — but it should
+not feel like one. If it is on screen without the keyboard, press the summon key
+to dismiss it.
+
 `Esc` always means "up one level": leave insert mode, leave the tool, dismiss.
 Double-`Esc` dismisses from anywhere. `Ctrl+C` is a full alias for `Esc` — some
 terminals swallow `Esc`, and the habit sticks.
