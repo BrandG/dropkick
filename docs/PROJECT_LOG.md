@@ -630,6 +630,45 @@ Request/Response *signal* pattern and will need signal support added; the
 notification path does not, which is why it went first and why the classic
 `org.freedesktop.Notifications` interface was used rather than the portal.
 
+## BUILT 2026-08-16 — Timer
+
+Countdown and stopwatch on `alt+t`. Durations parse as `25m`, `90`, `1h30m`,
+`2m30s`; a bare number is seconds. `Enter` arms, `space` starts/pauses, `w`
+runs a stopwatch, `r` resets.
+
+**The first tool that acts while Dropkick is hidden.** Time enters the core as a
+parameter, exactly as `now_ms` already does for the Esc ladder, so expiry is
+tested without sleeping — including the case that actually happens in
+production, a tick arriving *long* after expiry.
+
+The tick source lives exactly as long as the timer runs, at 100ms while the
+panel is up so the readout moves, and once a second while hidden. That is enough
+to notice a countdown has expired without waking ten times a second forever
+behind a stopwatch someone left running. `Timer::tick` returns true exactly
+once, so a late tick still fires and a slow one does not fire twice.
+
+A running timer shows in accent on its tab from every other tool, since the
+point of a countdown is that you stop thinking about it.
+
+Notifications connect to the bus per notification rather than holding a socket
+open for the life of the daemon; the handshake costs a millisecond or two and
+these are rare. Without the `dbus` feature the timer still counts down, it just
+cannot tell anyone who is not looking — verified in both builds.
+
+### The bug the harness found
+
+`s` was bound to "start stopwatch" while also being a duration unit, so typing
+`30s` — the most natural way to write thirty seconds — silently discarded the
+duration and switched modes. Nothing errored; the countdown just never counted.
+
+It surfaced only because `DROPKICK_DEBUG_TIMER` drove the real keymap rather
+than calling `arm()` directly, and then only because tracing showed
+`remaining=0` on the first tick instead of the notification simply never
+arriving. Absence of an error looks identical to never having run.
+
+Stopwatch moved to `w`. The rule worth keeping: **a key that is both a unit and
+a command will silently do the wrong one.**
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

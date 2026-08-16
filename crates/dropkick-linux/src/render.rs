@@ -7,6 +7,7 @@
 use dropkick_core::app::{App, ToolId, TOOLS};
 use dropkick_core::clipboard::Mode as ClipMode;
 use dropkick_core::scratchpad::Mode;
+use dropkick_core::timer::{format_duration, Mode as TimerMode};
 use dropkick_core::text::{cursor_cell, wrap_line};
 
 use crate::font::{Canvas, TextRenderer};
@@ -30,7 +31,16 @@ const FAINT: u32 = 0x3A_4250;
 const ERR: u32 = 0xE0_6C75;
 const RULE: u32 = 0x23_2932;
 
-pub fn draw(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
+/// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
+/// clock that can be stale, and the timer readout is the one thing here that
+/// must never be.
+pub fn draw(
+    app: &App,
+    text: &mut TextRenderer,
+    big: &mut TextRenderer,
+    now_ms: u64,
+    canvas: &mut Canvas,
+) {
     canvas.fill(BG);
     draw_tabs(app, text, canvas);
     canvas.fill_rect(0, TAB_H, canvas.w, 1, RULE);
@@ -41,6 +51,7 @@ pub fn draw(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
         ToolId::Calculator => draw_calculator(app, text, canvas, content_top, content_bottom),
         ToolId::Scratchpad => draw_scratchpad(app, text, canvas, content_top, content_bottom),
         ToolId::Clipboard => draw_clipboard(app, text, canvas, content_top, content_bottom),
+        ToolId::Timer => draw_timer(app, text, big, now_ms, canvas, content_top, content_bottom),
         _ => {
             let y = (content_top + content_bottom) as f32 / 2.0;
             let msg = "not built yet";
@@ -72,6 +83,10 @@ fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
             canvas.fill_rect((x - 9.0) as i32, TAB_H - 3, (w + 18.0) as i32, 3, ACCENT);
         }
 
+        // A running timer is visible from any tab: the point of a countdown is
+        // that you stop thinking about it.
+        let live = tool.id == ToolId::Timer && app.timer.is_running();
+
         let key_color = if !tool.built {
             FAINT
         } else if active {
@@ -83,6 +98,8 @@ fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
             FAINT
         } else if active {
             FG
+        } else if live {
+            ACCENT
         } else {
             DIM
         };
@@ -293,6 +310,55 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
         let marker = format!("{}/{}", clip.selected + 1, visible.len());
         let x = canvas.w as f32 - PAD - text.width_of(&marker);
         text.draw(canvas, x, bottom as f32 - lh * 0.3, &marker, FAINT);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_timer(
+    app: &App,
+    text: &mut TextRenderer,
+    big: &mut TextRenderer,
+    now_ms: u64,
+    canvas: &mut Canvas,
+    top: i32,
+    bottom: i32,
+) {
+    let t = &app.timer;
+    let lh = text.line_height();
+    let middle = (top + bottom) as f32 / 2.0;
+
+    let readout = format_duration(t.display_ms(now_ms));
+    let x = (canvas.w as f32 - big.width_of(&readout)) / 2.0;
+    let color = if t.finished {
+        ACCENT
+    } else if t.is_running() {
+        FG
+    } else {
+        DIM
+    };
+    big.draw(canvas, x, middle + big.line_height() * 0.3, &readout, color);
+
+    let label = match (t.mode, t.is_running(), t.finished) {
+        (_, _, true) => "finished".to_string(),
+        (TimerMode::Countdown, true, _) => format!("counting down from {}", format_duration(t.duration_ms())),
+        (TimerMode::Countdown, false, _) => "paused".to_string(),
+        (TimerMode::Stopwatch, true, _) => "stopwatch".to_string(),
+        (TimerMode::Stopwatch, false, _) => "stopped".to_string(),
+    };
+    let lx = (canvas.w as f32 - text.width_of(&label)) / 2.0;
+    text.draw(canvas, lx, middle - big.line_height() * 0.75, &label, DIM);
+
+    let mut y = middle + big.line_height() * 0.9 + lh;
+    if !t.input.is_empty() {
+        let entry = format!("> {}", t.input);
+        let ex = (canvas.w as f32 - text.width_of(&entry)) / 2.0;
+        let pen = text.draw(canvas, ex, y, &entry, FG);
+        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+        y += lh;
+    }
+    if let Some(err) = &t.error {
+        let ex = (canvas.w as f32 - text.width_of(err)) / 2.0;
+        text.draw(canvas, ex, y, err, ERR);
     }
 }
 

@@ -11,7 +11,7 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. Three tools built: Calculator, Scratchpad and Clipboard. The rest
+Pre-alpha. Four tools built: Scratchpad, Clipboard, Calculator and Timer. The rest
 show as dimmed tabs already holding their permanent keys, so nothing renumbers
 when they arrive.
 
@@ -229,7 +229,7 @@ and a key never moves once assigned:
 | `Alt+W` | Clipboard | built — history, search, pinning |
 | `Alt+E` | Calculator | built — expressions, units, date maths |
 | `Alt+R` | Calendar | planned |
-| `Alt+T` | Timer/Stopwatch | planned |
+| `Alt+T` | Timer/Stopwatch | built — countdown, stopwatch, notification |
 | `Alt+Y` | Generate | planned — passwords, UUIDs, hashes |
 | `Alt+U` | Color | planned — converter and eyedropper |
 | `Alt+I` `Alt+O` `Alt+P` | — | deliberately unspent |
@@ -242,6 +242,12 @@ Clipboard opens **masked**: entries show as dots with a length until you press a
 key. `Esc` leaves without revealing anything. Then `j`/`k` move, `/` searches,
 `Enter` pastes the selection and dismisses, `p` pins, `d` deletes, `x` clears
 everything unpinned, `c` pauses capture, `m` hides it again.
+
+Timer takes a duration and starts: `25m`, `90`, `1h30m`, `2m30s` — a bare number
+is seconds. `Enter` arms it, `space` starts and pauses, `w` runs a stopwatch
+instead, `r` resets. It keeps counting while Dropkick is hidden and posts a
+desktop notification when it finishes, which is the one thing Dropkick does
+while you are not looking at it.
 
 Scratchpad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
 mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes, `y` copies

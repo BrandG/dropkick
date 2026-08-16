@@ -9,6 +9,7 @@ use crate::calculator::Calculator;
 use crate::clipboard::{Clipboard, Outcome};
 use crate::key::{Key, KeyPress};
 use crate::scratchpad::Scratchpad;
+use crate::timer::Timer;
 
 /// Two Escapes closer together than this dismiss from anywhere, regardless of
 /// how many levels are open.
@@ -41,7 +42,7 @@ pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'w', built: true },
     Tool { id: ToolId::Calculator, name: "Calculator", key: 'e', built: true },
     Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
-    Tool { id: ToolId::Timer, name: "Timer", key: 't', built: false },
+    Tool { id: ToolId::Timer, name: "Timer", key: 't', built: true },
     Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: false },
     Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
 ];
@@ -69,6 +70,7 @@ pub struct App {
     pub calculator: Calculator,
     pub scratchpad: Scratchpad,
     pub clipboard: Clipboard,
+    pub timer: Timer,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -83,6 +85,7 @@ impl Default for App {
             calculator: Calculator::new(),
             scratchpad: Scratchpad::new(),
             clipboard: Clipboard::new(),
+            timer: Timer::new(),
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -118,6 +121,13 @@ impl App {
                             "enter paste  / find  p pin  d del  x clear  c pause  m hide  esc x"
                         }
                     }
+                }
+            }
+            ToolId::Timer => {
+                if self.timer.is_running() {
+                    "space pause   r reset   esc x   (it keeps running while hidden)"
+                } else {
+                    "type 25m + enter   space start/pause   w stopwatch   r reset   esc x"
                 }
             }
             _ => "not built yet   alt+q scratchpad   alt+w clipboard   alt+e calculator",
@@ -237,6 +247,13 @@ impl App {
                     self.notice = Some("scratchpad copied to clipboard".to_string());
                 }
                 if consumed {
+                    Response::Redraw
+                } else {
+                    Response::Ignored
+                }
+            }
+            ToolId::Timer => {
+                if self.timer.on_key(press, now_ms) {
                     Response::Redraw
                 } else {
                     Response::Ignored
@@ -373,17 +390,20 @@ mod tests {
 
     #[test]
     fn cycling_skips_unbuilt_tools_and_wraps() {
-        // Calendar, Timer, Generate and Color trail the built three, so a naive
-        // index step would land on a dead tab.
+        // Derived from TOOLS rather than hard-coded, so building a new tool
+        // does not require editing this test to keep it honest. Landing on an
+        // unbuilt tool fails, because `built` does not contain one.
+        let built: Vec<ToolId> = TOOLS.iter().filter(|t| t.built).map(|t| t.id).collect();
+        assert!(built.len() >= 2);
+
         let mut app = App::new();
-        app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Clipboard);
-        app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Calculator);
-        app.on_key(KeyPress::alt('l'), 0);
-        assert_eq!(app.active, ToolId::Scratchpad, "should wrap past the unbuilt tail");
+        assert_eq!(app.active, built[0], "first launch lands on the leftmost tool");
+        for expected in built.iter().skip(1).chain(built.iter().take(1)) {
+            app.on_key(KeyPress::alt('l'), 0);
+            assert_eq!(app.active, *expected);
+        }
         app.on_key(KeyPress::alt('h'), 0);
-        assert_eq!(app.active, ToolId::Calculator, "should wrap backwards past the tail");
+        assert_eq!(app.active, built[built.len() - 1], "backwards wraps too");
     }
 
     #[test]

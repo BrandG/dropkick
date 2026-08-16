@@ -39,7 +39,7 @@ use std::time::{Duration, Instant};
 
 use smithay_client_toolkit::reexports::calloop::{
     channel, generic::Generic, timer::TimeoutAction, timer::Timer, EventLoop, Interest, LoopHandle,
-    Mode as CalloopMode, PostAction,
+    Mode as CalloopMode, PostAction, RegistrationToken,
 };
 use smithay_client_toolkit::reexports::calloop_wayland_source::WaylandSource;
 use smithay_client_toolkit::reexports::client::{
@@ -132,6 +132,9 @@ struct Dropkick {
 
     app: App,
     text: TextRenderer,
+    big: TextRenderer,
+    /// Live while the timer runs, dropped when it stops.
+    tick_token: Option<RegistrationToken>,
     mods: Mods,
     started: Instant,
 
@@ -178,6 +181,9 @@ impl Dropkick {
         self.cycle = Some(Cycle::new());
         // Resume must not mean "put the last screenful back on screen".
         self.app.on_summon();
+        // A tick that was running at one second needs to speed up now the
+        // readout is visible.
+        self.ensure_ticking();
 
         if self.strategy == Strategy::Recreate || self.layer.is_none() {
             let surface = self.compositor.create_surface(&self.qh);
@@ -277,7 +283,8 @@ impl Dropkick {
             .expect("create buffer");
 
         let mut canvas = Canvas { buf: pixels, w: width as i32, h: height as i32 };
-        render::draw(&self.app, &mut self.text, &mut canvas);
+        let now = self.started.elapsed().as_millis() as u64;
+        render::draw(&self.app, &mut self.text, &mut self.big, now, &mut canvas);
 
         let Some(layer) = self.layer.as_ref() else { return };
         layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
@@ -448,11 +455,85 @@ impl Dropkick {
         }
     }
 
+    /// Keep a tick source alive exactly while the timer is running.
+    ///
+    /// 100ms while the panel is up, so the readout moves; once a second while
+    /// hidden, which is enough to notice a countdown has expired without waking
+    /// ten times a second forever behind a stopwatch someone forgot about.
+    fn ensure_ticking(&mut self) {
+        if !self.app.timer.is_running() || self.tick_token.is_some() {
+            return;
+        }
+        let handle = self.handle.clone();
+        self.tick_token = handle
+            .insert_source(
+                Timer::from_duration(Duration::from_millis(100)),
+                |_, _, state: &mut Dropkick| state.on_tick(),
+            )
+            .ok();
+    }
+
+    fn on_tick(&mut self) -> TimeoutAction {
+        let now = self.started.elapsed().as_millis() as u64;
+        if std::env::var_os("DROPKICK_TRACE").is_some() {
+            eprintln!(
+                "  [tick] now={now} running={} remaining={}",
+                self.app.timer.is_running(),
+                self.app.timer.remaining_ms(now)
+            );
+        }
+        if self.app.timer.tick(now) {
+            self.notify_timer_finished();
+        }
+        if !self.app.timer.is_running() {
+            self.tick_token = None;
+            // One last paint so a visible panel shows 0:00 rather than freezing
+            // a tenth short of it.
+            if self.phase != Phase::Hidden {
+                let qh = self.qh.clone();
+                self.draw(&qh);
+            }
+            return TimeoutAction::Drop;
+        }
+        if self.phase != Phase::Hidden {
+            let qh = self.qh.clone();
+            self.draw(&qh);
+            TimeoutAction::ToDuration(Duration::from_millis(100))
+        } else {
+            TimeoutAction::ToDuration(Duration::from_secs(1))
+        }
+    }
+
+    #[cfg(feature = "dbus")]
+    fn notify_timer_finished(&mut self) {
+        let body = format!("{} elapsed", dropkick_core::timer::format_duration(self.app.timer.duration_ms()));
+        // Connect per notification rather than holding a bus socket open for
+        // the life of the daemon. The handshake costs a millisecond or two and
+        // these are rare.
+        match dropkick_linux::dbus::Bus::session()
+            .and_then(|mut bus| bus.notify("Dropkick timer finished", &body))
+        {
+            Ok(id) => {
+                if std::env::var_os("DROPKICK_DEBUG").is_some() {
+                    eprintln!("  [timer] expired, notification {id} posted");
+                }
+            }
+            Err(e) => eprintln!("dropkickd: could not post notification: {e}"),
+        }
+    }
+
+    #[cfg(not(feature = "dbus"))]
+    fn notify_timer_finished(&mut self) {
+        // Built without the dbus feature: the timer still finishes, it just
+        // cannot tell anyone who is not looking at the panel.
+    }
+
     fn dispatch_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
         let Some(press) = translate(&event, self.mods) else { return };
         let now = self.started.elapsed().as_millis() as u64;
         let response = self.app.on_key(press, now);
         self.drain_requests(qh);
+        self.ensure_ticking();
         match response {
             Response::Redraw => self.draw(qh),
             Response::Dismiss => self.hide(),
@@ -555,9 +636,9 @@ fn main() {
         _ => Strategy::Recreate,
     };
 
-    let text = match TextRenderer::new(16.0) {
-        Ok(t) => t,
-        Err(e) => {
+    let (text, big) = match (TextRenderer::new(16.0), TextRenderer::new(58.0)) {
+        (Ok(t), Ok(b)) => (t, b),
+        (Err(e), _) | (_, Err(e)) => {
             eprintln!("dropkickd: {e}");
             std::process::exit(1);
         }
@@ -608,6 +689,8 @@ fn main() {
         handle: handle.clone(),
         app: App::new(),
         text,
+        big,
+        tick_token: None,
         mods: Mods::default(),
         started: Instant::now(),
         conn: conn.clone(),
@@ -634,6 +717,22 @@ fn main() {
     // Clipboard capture starts with the daemon, not with the panel: history you
     // only collect while the window is open is not history.
     state.init_clipboard(&qh);
+
+    // Dev-only: arm a countdown at startup, so the one behaviour that only
+    // happens with the panel hidden can actually be exercised.
+    if let Some(spec) = std::env::var_os("DROPKICK_DEBUG_TIMER") {
+        let spec = spec.to_string_lossy().to_string();
+        for c in spec.chars() {
+            state.app.timer.on_key(dropkick_core::key::KeyPress::ch(c), 0);
+        }
+        state.app.timer.on_key(dropkick_core::key::KeyPress::plain(DkKey::Enter), 0);
+        state.ensure_ticking();
+        println!(
+            "dropkickd: debug countdown armed ({spec}) running={} token={}",
+            state.app.timer.is_running(),
+            state.tick_token.is_some()
+        );
+    }
 
     if state.bench {
         println!(
@@ -741,13 +840,16 @@ fn seed_clipboard(app: &mut App) {
 /// Render frames to PPM without a compositor, so the UI can be inspected in
 /// review and in CI rather than only by looking at a running desktop.
 fn shots(prefix: &str) -> std::io::Result<()> {
-    let mut text = match TextRenderer::new(16.0) {
-        Ok(t) => t,
-        Err(e) => {
+    let (mut text, mut big) = match (TextRenderer::new(16.0), TextRenderer::new(58.0)) {
+        (Ok(t), Ok(b)) => (t, b),
+        (Err(e), _) | (_, Err(e)) => {
             eprintln!("dropkickd: {e}");
             std::process::exit(1);
         }
     };
+    // Frames render at a fixed instant so they are byte-identical run to run;
+    // setup drives keys at t=0, so the timer shows a minute of progress.
+    const SHOT_NOW_MS: u64 = 63_000;
 
     type Frame = (&'static str, Box<dyn Fn(&mut App)>);
     let frames: Vec<Frame> = vec![
@@ -837,6 +939,25 @@ break it did not have.";
             }),
         ),
         (
+            "timer-countdown",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('t'), 0);
+                for c in "25m".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+            }),
+        ),
+        (
+            "timer-entry",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('t'), 0);
+                for c in "1h30m".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
             "unbuilt-tab",
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('r'), 0);
@@ -849,7 +970,7 @@ break it did not have.";
         setup(&mut app);
         let mut buf = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
         let mut canvas = Canvas { buf: &mut buf, w: WIDTH as i32, h: HEIGHT as i32 };
-        render::draw(&app, &mut text, &mut canvas);
+        render::draw(&app, &mut text, &mut big, SHOT_NOW_MS, &mut canvas);
         let path = format!("{prefix}-{name}.ppm");
         std::fs::write(&path, canvas.to_ppm())?;
         println!("wrote {path}");

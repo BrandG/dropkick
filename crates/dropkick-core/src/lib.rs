@@ -20,6 +20,7 @@ pub mod clipboard;
 pub mod key;
 pub mod scratchpad;
 pub mod text;
+pub mod timer;
 
 pub use app::{App, Request, Response, ToolId, TOOLS};
 pub use key::{Key, KeyPress, Mods};
