@@ -782,7 +782,10 @@ for the whole session rather than just long enough to acquire.
 **Now: map Exclusive, then downgrade to `OnDemand` the instant
 `wl_keyboard.enter` arrives.** The fast summon is unchanged — measured 0.43ms
 median to focus, against 0.48ms before — and ordinary behaviour is restored:
-click away and focus leaves, click the panel and it returns.
+click away and focus leaves, click the panel and it returns. **Verified by the
+user 2026-08-16**: clicking another window returns focus to it. cosmic-comp
+honours the downgrade, so the fallback plan of moving to an `xdg_toplevel`
+window is not needed.
 
 The first instinct was to add a key that releases the keyboard. That was the
 wrong shape of answer: the user was not asking for a new gesture, they were
