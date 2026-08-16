@@ -178,13 +178,18 @@ impl Dropkick {
     }
 
     /// Show the panel because a timer went off, rather than because the user
-    /// asked. `OnDemand` is the whole point: the panel appears and stays, but
-    /// does not take the keyboard, so an alarm arriving mid-sentence cannot
-    /// swallow what you were typing into something else. Click it, or press the
-    /// summon key, to interact.
+    /// asked.
+    ///
+    /// `None`, not `OnDemand`. Measured with `OnDemand`, Dropkick never
+    /// received `wl_keyboard.enter` — and the user's focused window still lost
+    /// focus when the overlay mapped. That combination is worse than taking the
+    /// keyboard outright: keystrokes go nowhere instead of somewhere
+    /// recoverable. `None` states outright that this surface must never be
+    /// given the keyboard, which is the only honest request for an alert the
+    /// user did not ask for. Dismiss it with the summon key.
     fn show_for_alarm(&mut self) {
         self.app.active = dropkick_core::app::ToolId::Timer;
-        self.show_with(KeyboardInteractivity::OnDemand);
+        self.show_with(KeyboardInteractivity::None);
     }
 
     fn show_with(&mut self, interactivity: KeyboardInteractivity) {

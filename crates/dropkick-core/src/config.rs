@@ -19,10 +19,12 @@ pub struct Config {
     pub timer_sound: bool,
     /// Bring the panel up when a countdown finishes.
     ///
-    /// Off by default. It does not take the keyboard — measured — but it does
-    /// cover the top of the screen, and a critical notification already waits
-    /// for you, so the panel is redundant noise for most people. Available for
-    /// anyone who wants the alarm to be unmissable rather than merely patient.
+    /// Off by default, and worth knowing why before turning it on: an overlay
+    /// mapping can take focus away from whatever you were using, even though
+    /// Dropkick never receives the keyboard itself. It also covers the top of
+    /// the screen. A critical notification already waits for you, so this is
+    /// only for people who want an alarm that is unmissable rather than merely
+    /// patient, and who can live with the interruption.
     pub timer_show_panel: bool,
 }
 
@@ -85,10 +87,10 @@ timer.notify = true
 # Ask the notification server to play a sound with it.
 timer.sound = true
 
-# Also bring the panel up when a countdown finishes. It does not take the
-# keyboard, but it does cover the top of the screen, and the notification
-# above already waits for you. Turn it on if you want the alarm to be
-# unmissable rather than merely patient.
+# Also bring the panel up when a countdown finishes. Off because it covers
+# the top of the screen and can pull focus away from what you were doing,
+# and the notification above already waits for you. Turn it on if you want
+# an alarm that is unmissable rather than merely patient.
 timer.show_panel = false
 "
     }

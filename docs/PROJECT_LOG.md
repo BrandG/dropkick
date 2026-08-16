@@ -692,10 +692,20 @@ of which were going unused. Now:
   notification that waits for you is usually enough. Kept as a setting for
   anyone who wants an alarm that is unmissable rather than merely patient.
 
-  Measured while flipping the default: the alarm panel does **not** take the
-  keyboard. `wl_keyboard.enter` never arrives when it maps with `OnDemand`, so
-  the "cannot swallow what you were typing" property holds. It blocks the view,
-  which is reason enough to default it off.
+  **Correction.** The claim that `OnDemand` avoids disturbing focus was wrong,
+  and the measurement that appeared to support it was too narrow. Dropkick never
+  receives `wl_keyboard.enter` — that part is true and traced — but the user
+  observed their focused window losing focus anyway when the overlay mapped.
+  Both are consistent: the compositor deactivates the focused window without
+  handing the keyboard to the layer surface, so keystrokes land nowhere at all.
+  That is worse than taking focus outright, because nothing recoverable holds
+  them.
+
+  The alarm panel now maps with `KeyboardInteractivity::None`, which states
+  outright that the surface must never be given the keyboard, rather than
+  `OnDemand`, which merely declines to demand it. Lesson: "we did not receive
+  X" is not evidence for "nothing was disturbed" — the user watching the screen
+  saw something the client-side trace could not.
 
 The panel maps with `KeyboardInteractivity::OnDemand`, not `Exclusive`. An alarm
 that stole the keyboard mid-sentence would eat what you were typing into
