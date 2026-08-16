@@ -78,10 +78,15 @@ spatial correspondence is why it will stick.
 
 Rules that are cheap now and expensive later:
 
-- **Keys bind to tools, never to tab positions.** If Alt+Q means "first tab",
-  inserting a tool later shifts every binding and destroys months of muscle
-  memory in one release. Each tool gets a permanent key; tab order follows key
-  order; new tools take T, Y, U…; a retired tool's key stays retired.
+- **Keys bind to tools, not to tab positions.** If Alt+Q means "first tab",
+  inserting a tool later shifts every binding at once. So each tool has its own
+  key, tab order follows key order, and new tools take the next free letter.
+  - **Scope of this rule, clarified 2026-08-15:** it protects the user's own
+    fingers, nothing else. There is one user, and he is the person who feels the
+    cost, so he is the person who decides when a reshuffle is worth it. Reorder
+    when he asks; do not pre-emptively argue against it, and do not attach a
+    warning about permanence to changes he requested. Flag real costs (work,
+    risk, breakage) and leave the rest to him.
 - **Esc is strictly "up one level"** — insert mode → command mode → dismiss —
   and **double-Esc always dismisses from anywhere**. Esc will be the most-pressed
   key in the product. If it sometimes dismisses and sometimes does not, the user
@@ -561,14 +566,6 @@ nothing checked.
 **Order is now Scratchpad `q`, Clipboard `w`, Calculator `e`.** Calendar, Timer,
 Generate and Color keep `r t y u`; `i o p` stay unspent. First launch lands on
 Scratchpad rather than Calculator; after that, resume decides.
-
-This **moves keys that were already assigned**, which the permanence rule
-forbids. It is allowed exactly once, here, because the rule exists to protect
-muscle memory and there is none yet — two days in, one user, a handful of
-sessions. Doing it now costs an afternoon of test churn. Doing it in a month
-costs the thing the rule protects. **From here the rule binds:** the reason to
-reorder was "Scratchpad will get the most use", and that reason will still be
-true later without justifying a second reshuffle.
 
 The alternative — keeping keys and only reordering the *display* — was rejected
 because it breaks the reason the top row was chosen at all: the keyboard's
