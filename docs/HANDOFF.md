@@ -16,16 +16,16 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-16
 
-Four of seven tools built. 119 tests, clippy clean at zero warnings.
+Five of seven tools built. 173 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
-| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `y` yanks to clipboard |
+| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
 | `alt+e` | Calculator | built — recursive-descent evaluator, functions, `ans` |
 | `alt+r` | Calendar | not built — needs the storage layer |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
-| `alt+y` | Generate | not built — passwords, UUIDs, hashes |
+| `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
 | `alt+u` | Color | not built — converter + eyedropper (needs D-Bus signals) |
 | `alt+i/o/p` | — | deliberately unspent |
 
@@ -100,20 +100,56 @@ panel the user summoned, a configure for one that asked for no keyboard.
 `s` meant "stopwatch" and "seconds"; `30s` quietly did the wrong thing. Relevant
 to Generate, where `p`/`u`/`h` could each mean a mode and a character class.
 
+**Key repeat is the client's job on Wayland.** The compositor sends one press
+and one release, never the repeats. The keyboard must be built with
+`get_keyboard_with_repeat`; with plain `get_keyboard`, holding Backspace deletes
+exactly one character. The `repeat_key` handler is a *different* path — native
+`KeyState::Repeated`, wl_keyboard v10, which cosmic-comp does not send — so it
+existing proves nothing about repeat working.
+
+**Anything copied is recorded in clipboard history unless it says otherwise.**
+`set_clipboard` records every copy, so a generated password would land in the
+`alt+w` list. Secrets go out as `Request::SetClipboardSecret`, which offers
+`x-kde-passwordManagerHint` — that both skips our history and asks other
+clipboard managers to skip it. A separate variant, not a flag, so a call site
+cannot leak one by forgetting.
+
 **`dropkick-core` has zero dependencies and must keep them.** Time enters as a
 `now_ms` parameter, never read inside; that is why expiry and the Esc ladder are
 testable without sleeping. Platform work goes in `dropkick-linux`; the core
 raises an `app::Request` for anything only the platform can do.
 
-**`deny.toml` fails the build if a network-capable crate appears.** The tree is
-61 crates and none can open a socket. Check before claiming otherwise.
+**`deny.toml` fails the build if a network-capable crate appears**, and a
+pre-commit hook now runs it. **The hook needs turning on once per clone** — git
+will not enable a repository's hooks by itself:
+
+```
+cargo install cargo-deny
+git config core.hooksPath .githooks
+cargo deny check                      # advisories, bans, licenses, sources
+```
+
+If `core.hooksPath` is unset, nothing is being checked and it looks exactly like
+everything passing. Verify with `git config core.hooksPath`.
+
+The hook runs `--offline`: a check enforcing "this program cannot use the
+network" must not itself need the network to let you commit. The cost is a
+stale advisory database, so refresh it occasionally with `cargo deny fetch`.
+It fails loudly if `cargo-deny` is missing rather than skipping — silently
+passing when the tool is absent is how this went unenforced in the first place.
+
+Exceptions live in the `ignore` list with a written reason and the conditions
+that reopen them. Never silence a check to make it pass: a permanently red run
+teaches everyone to skip it, which is the failure this file exists to prevent.
+One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
 
 ## What is next, and what each needs
 
-- **Generate** (`alt+y`) — needs nothing new. Passwords, UUIDs, hashes are core
-  logic plus the clipboard plumbing that exists. Shortest path to a fifth tool.
-  Must state plainly that nothing is stored, and offer length / character-class
-  / exclude-ambiguous settings.
+- **Hashes in Generate** (`alt+y`) — the deferred half. Needs a from-scratch
+  SHA-256 in core, since it has zero dependencies and keeps them: ~80 lines,
+  testable against published vectors. **Decided: the input is the current
+  clipboard contents**, so it needs no new UI beyond a third kind alongside
+  `p` and `u`.
 - **Calendar** (`alt+r`) — forces the storage layer to become real: month grid,
   dots on days with events, arrow navigation, events listed for the focused day.
   Storage decisions are made and unimplemented (see the log): XDG dirs, `0600`,

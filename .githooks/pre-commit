@@ -1,0 +1,54 @@
+#!/bin/sh
+#
+# Dropkick pre-commit hook: enforce the no-networking claim mechanically.
+#
+# `deny.toml` is what makes "Dropkick has no networking code" checkable rather
+# than merely promised. Until 2026-08-16 nothing ran it, and it turned out to
+# have a hole in it (a `mio` ban that made an exception for calloop). A check
+# nobody runs is documentation, not enforcement. This is the thing that runs it.
+#
+# Installed by pointing git at this directory:
+#
+#     git config core.hooksPath .githooks
+#
+# Kept in the repository rather than in .git/hooks so it survives a clone and
+# can be read by anyone auditing the claim.
+#
+# To commit without it, deliberately:  git commit --no-verify
+
+set -eu
+
+# Hooks do not inherit an interactive shell's PATH. Git launched from an editor
+# or a GUI client can have a near-empty one, and cargo lives here.
+if [ -d "$HOME/.cargo/bin" ]; then
+    PATH="$HOME/.cargo/bin:$PATH"
+    export PATH
+fi
+
+if ! command -v cargo-deny >/dev/null 2>&1; then
+    # Fail rather than skip. Silently passing when the tool is missing is
+    # exactly how this check came to be unenforced for months.
+    echo "pre-commit: cargo-deny is not installed, so the no-networking check" >&2
+    echo "            cannot run. Install it, or bypass deliberately:" >&2
+    echo >&2
+    echo "              cargo install cargo-deny" >&2
+    echo "              git commit --no-verify" >&2
+    exit 1
+fi
+
+# --offline on purpose. A hook that enforces "this program cannot use the
+# network" should not itself need the network to let you commit, and commits
+# have to work on a train. The cost is that the advisory database is only as
+# fresh as the last online run, so refresh it now and then:
+#
+#     cargo deny fetch && cargo deny check
+#
+# bans, licenses and sources read only Cargo.lock and never wanted the network.
+echo "pre-commit: cargo deny check (offline)"
+if ! cargo deny --offline check 2>&1; then
+    echo >&2
+    echo "pre-commit: refused. Something in the dependency tree broke a rule in" >&2
+    echo "            deny.toml. Do not silence the check to make it pass --" >&2
+    echo "            add an exception with a written reason, or drop the crate." >&2
+    exit 1
+fi

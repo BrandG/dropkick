@@ -7,6 +7,7 @@
 
 use crate::calculator::Calculator;
 use crate::clipboard::{Clipboard, Outcome};
+use crate::generate::{Generate, Outcome as GenOutcome};
 use crate::key::{Key, KeyPress};
 use crate::scratchpad::Scratchpad;
 use crate::timer::Timer;
@@ -43,7 +44,7 @@ pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Calculator, name: "Calculator", key: 'e', built: true },
     Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
     Tool { id: ToolId::Timer, name: "Timer", key: 't', built: true },
-    Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: false },
+    Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: true },
     Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
 ];
 
@@ -53,6 +54,16 @@ pub const TOOLS: [Tool; 7] = [
 pub enum Request {
     /// Put this text on the system clipboard.
     SetClipboard(String),
+    /// Put this on the clipboard as a **secret**: offered with the password
+    /// manager hint, and never entered into clipboard history — not ours, and
+    /// not any other manager on the system that honours the hint.
+    ///
+    /// A separate variant rather than a flag so that a call site cannot copy a
+    /// secret by forgetting to say it was one.
+    SetClipboardSecret(String),
+    /// Top the Generate pool up with this many bytes of OS randomness. Raised
+    /// by the core because the core has no way to read any.
+    Entropy(usize),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -71,6 +82,7 @@ pub struct App {
     pub scratchpad: Scratchpad,
     pub clipboard: Clipboard,
     pub timer: Timer,
+    pub generate: Generate,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -86,6 +98,7 @@ impl Default for App {
             scratchpad: Scratchpad::new(),
             clipboard: Clipboard::new(),
             timer: Timer::new(),
+            generate: Generate::new(),
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -109,7 +122,9 @@ impl App {
             ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
                 crate::scratchpad::Mode::Insert => "INSERT   esc or ctrl-c leaves",
-                crate::scratchpad::Mode::Command => "i insert  o line  x cut  u undo  y copy all  hjkl move  esc x",
+                crate::scratchpad::Mode::Visual => "VISUAL   d cut   y copy   hjkl gg G extend   esc back",
+                crate::scratchpad::Mode::VisualLine => "VISUAL LINE   d cut   y copy   jk gg G extend   esc back",
+                crate::scratchpad::Mode::Command => "i insert  v sel  dd cut  yy copy  Y copy all  u undo  hjkl move  esc x",
             },
             ToolId::Clipboard => {
                 if !self.clipboard.revealed {
@@ -123,6 +138,12 @@ impl App {
                     }
                 }
             }
+            ToolId::Generate => match self.generate.kind {
+                crate::generate::Kind::Uuid => "p password   r new   y copy   esc x",
+                crate::generate::Kind::Password => {
+                    "u uuid  a A 0 ! types  x lookalikes  +- length  r new  y copy"
+                }
+            },
             ToolId::Timer => {
                 if self.timer.is_running() {
                     "space pause   r reset   esc x   (it keeps running while hidden)"
@@ -155,10 +176,31 @@ impl App {
     }
 
     /// Called whenever a tool becomes active, and on every summon.
+    /// Raise a refill if the pool is low. Cheap to call after every key: it is
+    /// a length check, and it means a long password can never find itself
+    /// half-generated and out of randomness.
+    fn ask_for_entropy(&mut self) {
+        if let Some(n) = self.generate.wants_entropy() {
+            self.pending.push(Request::Entropy(n));
+        }
+    }
+
     fn on_enter_tool(&mut self) {
         if self.active == ToolId::Clipboard {
             self.clipboard.on_enter();
         }
+        // Clearing the value is unconditional, like the Scratchpad below: a
+        // generated password must not still be on screen when the panel comes
+        // back, whichever tab it comes back to. Asking for randomness is not --
+        // every other tool would otherwise queue a refill it has no use for.
+        self.generate.on_enter();
+        if self.active == ToolId::Generate {
+            self.ask_for_entropy();
+        }
+        // Unconditional: a pending operator in the Scratchpad has to be cleared
+        // even when the tool being entered is a different one, because that is
+        // exactly the case that leaves it half-typed.
+        self.scratchpad.on_enter();
     }
 
     /// The platform calls this when the panel is summoned. Resume must not mean
@@ -243,8 +285,15 @@ impl App {
             ToolId::Scratchpad => {
                 let consumed = self.scratchpad.on_key(press);
                 if let Some(text) = self.scratchpad.take_yank() {
+                    // Say how much, not just that it happened: a yank whose
+                    // range was not what you meant looks identical otherwise.
+                    let lines = text.lines().count().max(1);
+                    self.notice = Some(if lines == 1 {
+                        format!("copied {} characters", text.chars().count())
+                    } else {
+                        format!("copied {lines} lines")
+                    });
                     self.pending.push(Request::SetClipboard(text));
-                    self.notice = Some("scratchpad copied to clipboard".to_string());
                 }
                 if consumed {
                     Response::Redraw
@@ -259,6 +308,22 @@ impl App {
                     Response::Ignored
                 }
             }
+            ToolId::Generate => match self.generate.on_key(press) {
+                GenOutcome::CopySecret(text) => {
+                    self.pending.push(Request::SetClipboardSecret(text));
+                    // Say that it is not in the history, because the Clipboard
+                    // tab is right there and its absence would otherwise look
+                    // like a bug.
+                    self.notice = Some("copied - not saved to clipboard history".to_string());
+                    self.ask_for_entropy();
+                    Response::Redraw
+                }
+                GenOutcome::Redraw => {
+                    self.ask_for_entropy();
+                    Response::Redraw
+                }
+                GenOutcome::Ignored => Response::Ignored,
+            },
             ToolId::Clipboard => match self.clipboard.on_key(press) {
                 Outcome::Paste(text) => {
                     self.pending.push(Request::SetClipboard(text));
@@ -487,8 +552,56 @@ mod tests {
             app.on_key(KeyPress::ch(c), 0);
         }
         app.on_key(KeyPress::plain(Key::Escape), 0);
+        // `yy`, not `y`: yank is a vi operator and needs its motion.
+        app.on_key(KeyPress::ch('y'), 0);
         app.on_key(KeyPress::ch('y'), 0);
         assert_eq!(app.pending, vec![Request::SetClipboard("note to self".to_string())]);
+    }
+
+    #[test]
+    fn generate_copies_as_a_secret_not_as_ordinary_text() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('y'), 0);
+        app.generate.supply_entropy(&vec![42u8; 1024]);
+        app.pending.clear();
+        app.on_key(KeyPress::ch('r'), 0);
+        let value = app.generate.value.clone();
+        assert!(!value.is_empty());
+        app.pending.clear();
+        app.on_key(KeyPress::ch('y'), 0);
+        // The distinction the whole tool rests on. `SetClipboard` here would put
+        // the password into clipboard history.
+        assert!(
+            app.pending.contains(&Request::SetClipboardSecret(value)),
+            "got {:?}",
+            app.pending
+        );
+        assert!(!app
+            .pending
+            .iter()
+            .any(|r| matches!(r, Request::SetClipboard(_))));
+    }
+
+    #[test]
+    fn a_generated_password_does_not_survive_a_summon() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('y'), 0);
+        app.generate.supply_entropy(&vec![7u8; 1024]);
+        app.on_key(KeyPress::ch('r'), 0);
+        assert!(!app.generate.value.is_empty());
+        app.on_summon();
+        assert!(app.generate.value.is_empty(), "still on screen next time it opens");
+    }
+
+    #[test]
+    fn switching_to_another_tool_does_not_ask_for_randomness() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('e'), 0);
+        assert!(
+            !app.pending.iter().any(|r| matches!(r, Request::Entropy(_))),
+            "only Generate needs entropy; {:?}",
+            app.pending
+        );
     }
 
     #[test]

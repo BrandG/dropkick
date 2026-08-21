@@ -206,6 +206,20 @@ impl Dropkick {
             // applies silently is indistinguishable from one that did not.
             self.app.notice = Some("settings reloaded".to_string());
         }
+        // Push the generator's settings across every summon, not only when the
+        // file changed: it is the same "the moment the user is present" hook,
+        // and it costs a struct copy.
+        let c = &self.settings.config;
+        self.app.generate.configure(
+            c.generate_length,
+            dropkick_core::generate::Classes {
+                lower: c.generate_lower,
+                upper: c.generate_upper,
+                digits: c.generate_digits,
+                symbols: c.generate_symbols,
+            },
+            c.generate_exclude_ambiguous,
+        );
 
         self.cycle_id += 1;
         let id = self.cycle_id;
@@ -464,7 +478,10 @@ impl Dropkick {
 
     /// Take ownership of the system selection so other applications can paste
     /// what the user picked.
-    fn set_clipboard(&mut self, text: String, qh: &QueueHandle<Self>) {
+    /// `secret` marks a generated password: it is offered with the password
+    /// manager hint so other clipboard managers skip it, and it is deliberately
+    /// not recorded in our own history.
+    fn set_clipboard(&mut self, text: String, secret: bool, qh: &QueueHandle<Self>) {
         let (Some(manager), Some(device)) = (self.data_manager.as_ref(), self.data_device.as_ref())
         else {
             return;
@@ -479,22 +496,50 @@ impl Dropkick {
         ] {
             source.offer(mime.to_string());
         }
+        if secret {
+            source.offer(dropkick_core::clipboard::PASSWORD_HINT.to_string());
+        }
         device.set_selection(Some(&source));
         // Record it here rather than reading our own selection back: the
         // self-capture guard suppresses that event, so without this a yank
         // would reach the system clipboard but never appear in the history.
-        self.app.clipboard.record(&text, &[]);
+        //
+        // Except for a secret, which is the entire point: Generate promises
+        // nothing is stored, and the Clipboard tab is two keys away.
+        if !secret {
+            self.app.clipboard.record(&text, &[]);
+        }
         self.source_text = text;
         self.source = Some(source);
         self.skip_next_selection = true;
         let _ = self.conn.flush();
     }
 
+    /// Randomness for Generate, straight from the kernel CSPRNG.
+    ///
+    /// `/dev/urandom` rather than a crate: `dropkick-core` has no dependencies
+    /// and this needs none either. It is the right source for keys on Linux --
+    /// it does not block after boot and is not weaker than `/dev/random`.
+    fn supply_entropy(&mut self, n: usize) {
+        use std::io::Read;
+        let mut buf = vec![0u8; n];
+        match std::fs::File::open("/dev/urandom")
+            .and_then(|mut f| f.read_exact(&mut buf).map(|_| ()))
+        {
+            Ok(()) => self.app.generate.supply_entropy(&buf),
+            // Never fall back to a weaker source. Generate shows "out of
+            // randomness" and produces nothing, which is the safe failure.
+            Err(e) => eprintln!("dropkickd: no entropy: {e}"),
+        }
+    }
+
     fn drain_requests(&mut self, qh: &QueueHandle<Self>) {
         let pending: Vec<Request> = self.app.pending.drain(..).collect();
         for req in pending {
             match req {
-                Request::SetClipboard(text) => self.set_clipboard(text, qh),
+                Request::SetClipboard(text) => self.set_clipboard(text, false, qh),
+                Request::SetClipboardSecret(text) => self.set_clipboard(text, true, qh),
+                Request::Entropy(n) => self.supply_entropy(n),
             }
         }
     }
@@ -783,6 +828,12 @@ fn main() {
     // only collect while the window is open is not history.
     state.init_clipboard(&qh);
 
+    // Seed the generator's pool now rather than on first use, so the first
+    // password costs no file open at the moment someone is waiting for it.
+    if let Some(n) = state.app.generate.wants_entropy() {
+        state.supply_entropy(n);
+    }
+
     // Dev-only: arm a countdown at startup, so the one behaviour that only
     // happens with the panel hidden can actually be exercised.
     if let Some(spec) = std::env::var_os("DROPKICK_DEBUG_TIMER") {
@@ -816,7 +867,7 @@ fn main() {
         );
     } else if let Some(text) = set_clipboard {
         println!("dropkickd: holding the selection ({} bytes); ctrl-c to release", text.len());
-        state.set_clipboard(text, &qh);
+        state.set_clipboard(text, false, &qh);
     } else {
         match ipc::spawn_listener(tx) {
             Ok(path) => {
@@ -972,6 +1023,96 @@ break it did not have.";
                 for c in para.chars() {
                     app.on_key(KeyPress::ch(c), 0);
                 }
+            }),
+        ),
+        (
+            "scratchpad-visual",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                for c in "call Frank re: staging server".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                for c in "don't forget migration 37".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Escape), 0);
+                // Character-wise, starting mid-word on the second line and
+                // running back up into the first: the case where the highlight
+                // has to stop partway along one row and fill the rest of another.
+                for c in "0lllllllllllvkllll".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
+            "scratchpad-visual-line",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                for (i, line) in
+                    ["milk", "bread", "coffee beans", "something for Sunday"].iter().enumerate()
+                {
+                    if i > 0 {
+                        app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                    }
+                    for c in line.chars() {
+                        app.on_key(KeyPress::ch(c), 0);
+                    }
+                }
+                app.on_key(KeyPress::plain(DkKey::Escape), 0);
+                for c in "ggjVj".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+            }),
+        ),
+        (
+            "scratchpad-visual-wrapped",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::ch('i'), 0);
+                let para = "A selection that crosses a wrap is the case worth looking at, \
+because the buffer knows nothing about display rows and the renderer knows nothing \
+about the buffer's idea of a line. If the highlight is right here it is right \
+everywhere.";
+                for c in para.chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Escape), 0);
+                // One logical line, selected across the wrap boundary.
+                app.on_key(KeyPress::ch('0'), 0);
+                for _ in 0..40 {
+                    app.on_key(KeyPress::ch('l'), 0);
+                }
+                app.on_key(KeyPress::ch('v'), 0);
+                for _ in 0..80 {
+                    app.on_key(KeyPress::ch('l'), 0);
+                }
+            }),
+        ),
+        (
+            "generate-password",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('y'), 0);
+                // Fixed bytes, so the frame is byte-identical run to run like
+                // every other shot -- never how the real tool gets randomness.
+                // Scattered rather than 0,1,2,...: sequential bytes map to
+                // sequential alphabet indices and produce "abcdefg...", which
+                // is correct and looks broken.
+                let seed: Vec<u8> =
+                    (0..252u32).map(|i| (i.wrapping_mul(97).wrapping_add(41) % 256) as u8).collect();
+                app.generate.supply_entropy(&seed);
+                app.on_key(KeyPress::ch('r'), 0);
+            }),
+        ),
+        (
+            "generate-uuid",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('y'), 0);
+                let seed: Vec<u8> = (0..=251u8).rev().collect();
+                app.generate.supply_entropy(&seed);
+                app.on_key(KeyPress::ch('u'), 0);
             }),
         ),
         (
@@ -1287,7 +1428,13 @@ impl KeyboardHandler for Dropkick {
         self.dispatch_key(qh, event);
     }
 
-    /// Held keys repeat through the same path, so backspace and hjkl behave.
+    /// The *compositor-driven* repeat path: only ever called when the server
+    /// sends `KeyState::Repeated` itself, which wl_keyboard gained in v10.
+    /// cosmic-comp does not, which is why implementing this alone did nothing
+    /// and holding Backspace deleted one character. The repeat that actually
+    /// fires here is client-side, synthesised by the callback installed in
+    /// `new_capability`. Both land in `dispatch_key`, so a compositor that
+    /// grows native repeat needs no change.
     fn repeat_key(
         &mut self,
         _: &Connection,
@@ -1342,7 +1489,29 @@ impl SeatHandler for Dropkick {
         capability: Capability,
     ) {
         if capability == Capability::Keyboard && self.keyboard.is_none() {
-            self.keyboard = self.seat_state.get_keyboard(qh, &seat, None).ok();
+            // `get_keyboard` -- no repeat. Wayland sends one press and one
+            // release and nothing in between: unlike X11, synthesising the
+            // repeats from `wl_keyboard.repeat_info` is the *client's* job. So
+            // holding Backspace deleted exactly one character, and `repeat_key`
+            // below was dead code that had never once run.
+            //
+            // `get_keyboard_with_repeat` does that synthesis, driven by the
+            // calloop loop this daemon already has. The compositor's own rate
+            // and delay are used, so held keys match every other application.
+            let handle = self.handle.clone();
+            self.keyboard = self
+                .seat_state
+                .get_keyboard_with_repeat(
+                    qh,
+                    &seat,
+                    None,
+                    handle,
+                    Box::new(|state: &mut Dropkick, _kbd, event| {
+                        let qh = state.qh.clone();
+                        state.dispatch_key(&qh, event);
+                    }),
+                )
+                .ok();
         }
     }
 

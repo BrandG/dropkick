@@ -30,6 +30,10 @@ const DIM: u32 = 0x69_727F;
 const FAINT: u32 = 0x3A_4250;
 const ERR: u32 = 0xE0_6C75;
 const RULE: u32 = 0x23_2932;
+// Selection sits behind unmodified FG text, so it has to be dark enough to read
+// through. Picked off TAB_ACTIVE rather than ACCENT for that reason -- an accent
+// wash bright enough to notice made the glyphs on top of it worse.
+const SELECT: u32 = 0x2E_3A4B;
 
 /// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
 /// clock that can be stale, and the timer readout is the one thing here that
@@ -52,6 +56,7 @@ pub fn draw(
         ToolId::Scratchpad => draw_scratchpad(app, text, canvas, content_top, content_bottom),
         ToolId::Clipboard => draw_clipboard(app, text, canvas, content_top, content_bottom),
         ToolId::Timer => draw_timer(app, text, big, now_ms, canvas, content_top, content_bottom),
+        ToolId::Generate => draw_generate(app, text, big, canvas, content_top, content_bottom),
         _ => {
             let y = (content_top + content_bottom) as f32 / 2.0;
             let msg = "not built yet";
@@ -182,6 +187,7 @@ fn draw_scratchpad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top:
         }
     }
 
+    let selection = app.scratchpad.selection();
     let visible = (((bottom - top) as f32 / lh).floor() as usize).max(1);
     // Scroll only as far as it takes to keep the cursor on screen.
     let scroll = cur_row.saturating_sub(visible.saturating_sub(1));
@@ -193,11 +199,39 @@ fn draw_scratchpad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top:
         let chars: Vec<char> = app.scratchpad.lines[line_i].chars().collect();
         let on_cursor_row = idx == cur_row;
 
+        // The selection is painted first, so the cursor and the glyphs land on
+        // top of it. It arrives in logical (line, char) coordinates, which is
+        // what makes a selection spanning a wrapped line come out right without
+        // this loop knowing anything about the wrap.
+        if let Some(sel) = selection {
+            let in_range = line_i >= sel.lo.0 && line_i <= sel.hi.0;
+            let band_y = (y - lh * 0.72) as i32;
+            let band_h = (lh * 0.85) as i32;
+            if sel.linewise && in_range {
+                // Edge to edge, so that selecting whole lines does not look
+                // identical to selecting the characters that happen to sit on
+                // them -- and so an empty line in the range is visible at all.
+                let w = (canvas.w as f32 - PAD * 2.0) as i32;
+                canvas.fill_rect(PAD as i32, band_y, w, band_h, SELECT);
+            } else if in_range {
+                let from = if line_i == sel.lo.0 { sel.lo.1 } else { 0 };
+                let to = if line_i == sel.hi.0 { sel.hi.1 + 1 } else { chars.len() };
+                // Clip the logical range down to the slice this row shows.
+                let (from, to) = (from.max(seg_start), to.min(seg_end));
+                if from < to {
+                    let w = ((to - from) as f32 * adv) as i32;
+                    let x = PAD + (from - seg_start) as f32 * adv;
+                    canvas.fill_rect(x as i32, band_y, w, band_h, SELECT);
+                }
+            }
+        }
+
         if on_cursor_row {
             let cx_px = PAD + cur_col as f32 * adv;
-            let (w, top_y, h) = match app.scratchpad.mode {
-                Mode::Command => (adv as i32, y - lh * 0.72, lh * 0.85),
-                Mode::Insert => (2, y - lh * 0.72, lh * 0.85),
+            let (w, top_y, h) = if app.scratchpad.mode == Mode::Insert {
+                (2, y - lh * 0.72, lh * 0.85)
+            } else {
+                (adv as i32, y - lh * 0.72, lh * 0.85)
             };
             canvas.fill_rect(cx_px as i32, top_y as i32, w, h as i32, ACCENT);
         }
@@ -206,7 +240,7 @@ fn draw_scratchpad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top:
         for (k, c) in chars[seg_start..seg_end].iter().enumerate() {
             // Keep the character under a block cursor legible.
             let under_block =
-                on_cursor_row && k == cur_col && app.scratchpad.mode == Mode::Command;
+                on_cursor_row && k == cur_col && app.scratchpad.mode != Mode::Insert;
             let color = if under_block { BG } else { FG };
             pen = text.draw(canvas, pen, y, &c.to_string(), color);
         }
@@ -314,6 +348,86 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+fn draw_generate(
+    app: &App,
+    text: &mut TextRenderer,
+    big: &mut TextRenderer,
+    canvas: &mut Canvas,
+    top: i32,
+    bottom: i32,
+) {
+    use dropkick_core::generate::Kind;
+    let g = &app.generate;
+    let lh = text.line_height();
+    let middle = (top + bottom) as f32 / 2.0;
+
+    // The value itself. A password is drawn at whatever size actually fits --
+    // 128 characters at the headline size would run off the panel, and a
+    // password you cannot read is a password you will get wrong.
+    let value_y = middle + lh * 0.3;
+    if let Some(problem) = g.problem {
+        let x = (canvas.w as f32 - text.width_of(problem)) / 2.0;
+        text.draw(canvas, x, value_y, problem, ERR);
+    } else if g.value.is_empty() {
+        let msg = "press r for a new one";
+        let x = (canvas.w as f32 - text.width_of(msg)) / 2.0;
+        text.draw(canvas, x, value_y, msg, FAINT);
+    } else {
+        let avail = canvas.w as f32 - PAD * 4.0;
+        let renderer: &mut TextRenderer =
+            if big.width_of(&g.value) <= avail { big } else { text };
+        let x = ((canvas.w as f32 - renderer.width_of(&g.value)) / 2.0).max(PAD);
+        renderer.draw(canvas, x, value_y, &g.value, FG);
+    }
+
+    // What it is, above.
+    let title = match g.kind {
+        Kind::Password => "password",
+        Kind::Uuid => "UUID v4",
+    };
+    let tx = (canvas.w as f32 - text.width_of(title)) / 2.0;
+    text.draw(canvas, tx, top as f32 + lh * 1.6, title, DIM);
+
+    // The settings, below, spelled out rather than shown as toggles: the state
+    // of the thing on screen should be readable without knowing the keymap.
+    let mut y = middle + lh * 2.2;
+    if g.kind == Kind::Password {
+        let mut parts: Vec<String> = vec![format!("{} characters", g.length)];
+        let mut kinds = Vec::new();
+        for (on, name) in [
+            (g.classes.lower, "a-z"),
+            (g.classes.upper, "A-Z"),
+            (g.classes.digits, "0-9"),
+            (g.classes.symbols, "symbols"),
+        ] {
+            if on {
+                kinds.push(name);
+            }
+        }
+        parts.push(if kinds.is_empty() { "nothing selected".into() } else { kinds.join(" ") });
+        if g.exclude_ambiguous {
+            parts.push("no lookalikes".into());
+        }
+        let line = parts.join("   ");
+        let sx = (canvas.w as f32 - text.width_of(&line)) / 2.0;
+        text.draw(canvas, sx, y, &line, DIM);
+        y += lh * 1.6;
+    } else {
+        y += lh * 0.6;
+    }
+
+    // The promise, stated on the tool that makes it. Rule 1 of the Clipboard is
+    // that it keeps things; this is the tool that does not, and saying so is
+    // the difference between a claim and a footnote in a README.
+    let promise = if g.copied {
+        "copied - and not saved to clipboard history"
+    } else {
+        "nothing here is stored, or kept after you close the panel"
+    };
+    let px = (canvas.w as f32 - text.width_of(promise)) / 2.0;
+    text.draw(canvas, px, y, promise, if g.copied { ACCENT } else { FAINT });
+}
+
 fn draw_timer(
     app: &App,
     text: &mut TextRenderer,

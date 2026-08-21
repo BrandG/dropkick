@@ -28,11 +28,43 @@ deny = [
     { name = "trust-dns-resolver" },
     { name = "hickory-resolver" },
     { name = "socket2" },
-    { name = "mio", wrappers = ["calloop"] },
+    # No wrapper exception. calloop needed one when it used mio for its event
+    # loop; calloop 0.14 does not, and mio is gone from the tree entirely. The
+    # exception was a hole -- mio speaks TCP and UDP, so "banned unless it comes
+    # via calloop" meant the no-networking claim had a carve-out. Closed.
+    { name = "mio" },
 ]
 
 [licenses]
+# The allowlist is deliberately forward-looking: it names licences that would be
+# fine if a crate arrived carrying one, not only those in the tree today. Left
+# on, cargo-deny warns about each unused entry, which put five warnings in front
+# of every commit once this ran in a pre-commit hook. Noise in a gate is how a
+# gate stops being read.
+unused-allowed-license = "allow"
 allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "BSD-2-Clause", "BSD-3-Clause", "ISC", "Zlib", "Unicode-3.0", "MPL-2.0", "CC0-1.0"]
 
 [advisories]
 yanked = "warn"
+
+# Exceptions are listed here with a reason, never by turning the check off.
+# The point of this file is that a NEW advisory stands out; a permanently red
+# `cargo deny check` teaches everyone to ignore it, which is the failure mode
+# this is meant to prevent. Revisit each of these when the tree changes.
+ignore = [
+    # ttf-parser is unmaintained: the author has said it will receive no further
+    # fixes, and there is no safe upgrade. It arrives via fontdue, which is
+    # still on 0.9.4 and still depends on it, so this cannot be resolved by
+    # updating -- only by replacing the rasteriser.
+    #
+    # Accepted knowingly (user, 2026-08-16). It is a font parser, and fonts come
+    # from the local system. An attacker who can write to your font directories
+    # is already past everything in the README's threat model. "Unmaintained" is
+    # not a vulnerability; what it means is that this one would not be fixed
+    # upstream if something were found.
+    #
+    # Revisit if: fontdue moves off ttf-parser (it would likely move to skrifa),
+    # or a concrete vulnerability lands against it rather than a maintenance
+    # notice, or Dropkick ever renders a font it did not get from the OS.
+    { id = "RUSTSEC-2026-0192", reason = "unmaintained font parser, local-only input, no upgrade path" },
+]

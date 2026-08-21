@@ -18,6 +18,7 @@ pub mod app;
 pub mod calculator;
 pub mod clipboard;
 pub mod config;
+pub mod generate;
 pub mod key;
 pub mod scratchpad;
 pub mod text;

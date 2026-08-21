@@ -26,11 +26,31 @@ pub struct Config {
     /// only for people who want an alarm that is unmissable rather than merely
     /// patient, and who can live with the interruption.
     pub timer_show_panel: bool,
+
+    /// Default password length. Clamped to the generator's limits on use, so a
+    /// nonsense value in the file cannot produce a nonsense password.
+    pub generate_length: usize,
+    pub generate_lower: bool,
+    pub generate_upper: bool,
+    pub generate_digits: bool,
+    pub generate_symbols: bool,
+    /// Leave out characters that are easy to misread: l I 1 O 0.
+    pub generate_exclude_ambiguous: bool,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Config { timer_notify: true, timer_sound: true, timer_show_panel: false }
+        Config {
+            timer_notify: true,
+            timer_sound: true,
+            timer_show_panel: false,
+            generate_length: 20,
+            generate_lower: true,
+            generate_upper: true,
+            generate_digits: true,
+            generate_symbols: true,
+            generate_exclude_ambiguous: false,
+        }
     }
 }
 
@@ -68,6 +88,18 @@ impl Config {
                 "timer.notify" => config.timer_notify = on,
                 "timer.sound" => config.timer_sound = on,
                 "timer.show_panel" => config.timer_show_panel = on,
+                "generate.length" => match value.parse::<usize>() {
+                    Ok(n) => config.generate_length = n,
+                    // A number that is not a number is reported like an unknown
+                    // key rather than silently left at the default -- same rule,
+                    // same reason.
+                    Err(_) => unknown.push(Unknown { line: i + 1, key: key.to_string() }),
+                },
+                "generate.lower" => config.generate_lower = on,
+                "generate.upper" => config.generate_upper = on,
+                "generate.digits" => config.generate_digits = on,
+                "generate.symbols" => config.generate_symbols = on,
+                "generate.exclude_ambiguous" => config.generate_exclude_ambiguous = on,
                 _ => unknown.push(Unknown { line: i + 1, key: key.to_string() }),
             }
         }
@@ -92,6 +124,18 @@ timer.sound = true
 # and the notification above already waits for you. Turn it on if you want
 # an alarm that is unmissable rather than merely patient.
 timer.show_panel = false
+
+# Default password length in Generate, and which character types it draws
+# from. Nothing generated is ever stored or copied into clipboard history.
+generate.length = 20
+generate.lower = true
+generate.upper = true
+generate.digits = true
+generate.symbols = true
+
+# Leave out characters that are easy to misread when typing a password
+# somewhere else by hand: l I 1 O 0.
+generate.exclude_ambiguous = false
 "
     }
 }

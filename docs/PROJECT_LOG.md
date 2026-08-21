@@ -799,6 +799,423 @@ dismissal anyway. So the panel stays visible after losing focus — no auto-hide
 which also suits keeping the Scratchpad up as a reference while typing
 elsewhere.
 
+## HELD KEYS DID NOT REPEAT — 2026-08-16 (user)
+
+First sustained use: "keypress holds are not recognized. If I try to delete a
+whole lot of characters in the scratchpad by holding down Backspace, it only
+deletes one character." True of cursor movement too, and of every key.
+
+**Cause: on Wayland, key repeat is the client's job.** The compositor sends one
+press and one release and nothing in between — unlike X11, where the server
+generates the repeats. `wl_keyboard.repeat_info` tells the client the user's rate
+and delay and expects it to synthesise the rest.
+
+`new_capability` built the keyboard with `SeatState::get_keyboard`, which does no
+repeat. A `repeat_key` handler was already implemented, and commented as though
+it did the job — it had never once run. **A handler existing is not evidence that
+anything calls it.**
+
+Now `get_keyboard_with_repeat`, driven by the calloop loop the daemon already
+has for timer ticks, so no new dependency and nothing new to shut down. The
+compositor's own rate and delay are used, so held keys feel like they do
+everywhere else.
+
+`KeyboardHandler::repeat_key` is kept and its comment corrected. It is a
+genuinely different path: SCTK only calls it for `KeyState::Repeated`, which
+wl_keyboard gained in v10 and cosmic-comp does not send. Client-side repeat goes
+through the installed callback instead. Both end in `dispatch_key`, so a
+compositor that grows native repeat needs no change here.
+
+Repeat is bound to focus — SCTK drops the repeat timer when the surface dies or
+`leave` arrives — which is correct and needs no work given the Exclusive-then-
+OnDemand downgrade.
+
+**Not verifiable by test.** This is compositor behaviour; `--shot` drives the
+`App` directly and never touches the platform keyboard. It needs a human holding
+a key — **verified by the user 2026-08-16**, so cosmic-comp does send
+`repeat_info` and the client-side path is doing the right thing with it.
+
+## dd DELETES A LINE — 2026-08-16 (user)
+
+Asked for directly, after "I have no way of clearing out the whole scratchpad
+other than hitting the delete key once for every key."
+
+`d` was unbound, so there is no collision, and `dd` is what vi muscle memory
+already expects. It needed the first operator-pending state in the Scratchpad:
+`pending: Option<char>`, set by `d` and consumed by the next key.
+
+Decisions inside it, each a place it could have gone wrong:
+
+- **An aborting key does not also run.** `dj` is not an operator we implement; vi
+  aborts on it. Aborting *and* moving would leave the cursor somewhere the user
+  did not ask for, so the next `dd` would delete the wrong line. The key is
+  swallowed.
+- **Esc aborts the pending operator and nothing else.** This is a new innermost
+  rung of the Esc ladder. It had to go in `leave_one_level`, not in the abort
+  path in `command_key`, because Esc is intercepted at the app layer and never
+  reaches `command_key` at all.
+- **The buffer is never empty.** `dd` on the last line leaves one blank line,
+  as vi does. Every other method indexes `lines[cy]` assuming a line exists.
+- **`on_enter` clears a half-typed operator**, and is called unconditionally
+  rather than only when the Scratchpad is the tool being entered — switching
+  *away* mid-operator is exactly the case that strands one. A stranded `d` would
+  silently eat the first `d` typed on the way back.
+- Undo already covers it: `dd` snapshots like any other command-mode edit, so
+  one `u` puts the line back.
+
+10 tests, one per decision above. 129 total, clippy clean.
+
+**Emergent, worth knowing:** now that repeat works, *holding* `d` alternates
+pending/delete and so deletes a line every second repeat. It works as a crude
+wipe. It is a side effect, not a design, and it is not what a whole-buffer wipe
+should rest on.
+
+## VISUAL SELECTION, AND y BECOMES A REAL OPERATOR — 2026-08-16 (user)
+
+Asked for while `dd` was being built: "if we want to do the G→gg pattern, we
+should implement a selection policy so that we could say G→gg→d to select all of
+the text, and then delete the selection. We will want to have partial selection
+in any case, right?"
+
+Yes — and **the wipe was the weaker half of the argument.** `y` used to yank the
+whole buffer, because that was the only way text got out of Dropkick without a
+file picker. Partial *yank* is what selection really buys. Deleting a selection
+falls out of the same machinery, and the whole-buffer wipe stops needing a
+gesture of its own.
+
+**The user chose vi mappings over the existing behaviour**, for a reason worth
+recording: "I would try to stick with VI mapping for y, so that new users (who
+know Vi) will be able to use it easier."
+
+So `y` is an operator now. Yanking everything became `ggyG`, which is a real cost
+on the action this tool is most used for — and is why `Y` was then spent on
+"yank all" instead of on vi's meaning. See below.
+
+### What exists
+
+```
+v / V        select by character / by whole line
+gg / G       first / last line, also useful on their own
+d y x        act on the selection
+dd yy        the doubled operator forms
+Y            yank the whole buffer -- NOT vi's Y, see below
+d{motion}    dj dk dgg dG d0 d$ dh dl, and the same for y
+esc          cancel the selection, then the mode, then the tool
+```
+
+### `Y` is the one deliberate departure from vi
+
+`Y` yanks the **whole buffer**. In vi it is `yy` — a synonym for yanking the
+line. (Trivia that cost a lookup: `Y` is where vi contradicts itself, since `D`
+is `d$` and `C` is `c$` but `Y` takes the whole line; Vim's own manual admits it,
+and Neovim changed the default to `y$` in 0.6.)
+
+**Decided by the user, twice, after the collision was put in front of them.**
+The reasoning is that `ggyG` is a lot of keys for the thing this tool is most
+used for — writing something down and taking it somewhere else — and that was
+a single `y` until this change.
+
+The cost, stated and accepted: a vi user pressing `Y` expecting one line gets
+the entire buffer, and does not find out until they paste. It is silent and it
+surfaces somewhere else.
+
+The mitigation is that **`Y` is in the hint line and the vi-standard keys are
+not.** That is the rule for this keymap now: keys a vi user can guess do not need
+advertising, and keys that would fool one do.
+
+### Decisions inside it
+
+- **One motion table.** `motion_for` is shared by plain movement, selection
+  extension, and operators, so `l`, `dl` and `vl` cannot drift apart.
+- **Operator ranges are written out, not derived.** `d$` takes the cursor
+  character through the end; `d0` stops *before* the cursor. vi's
+  inclusive/exclusive algebra is subtle enough that a clever general rule would
+  be wrong in a way nobody notices until it eats a character. There are nine
+  motions; they are each spelled out.
+- **A motion that cannot move does nothing.** `dj` on the last line deletes
+  nothing rather than falling back to deleting one line — the fallback is the
+  silent-wrong-thing failure this project keeps running into.
+- **`g` gets its own pending flag**, resolved before the operator, because `dgg`
+  is an operator waiting on a motion that is itself two keys. `g` followed by
+  anything else abandons the operator too.
+- **The anchor is clamped like the cursor.** It is a buffer position and the
+  buffer can shrink under it; an anchor past the end would panic on the slice.
+- **Esc unwinds selection before mode before tool**, and `on_enter` drops a
+  selection outright. Returning to a highlight you do not remember making, with
+  `d` armed, is the worst of the available surprises.
+
+### Rendering
+
+The selection crosses to the platform as logical `(line, char)` positions, not
+screen rows. `draw_scratchpad` already flattened wrapped lines into rows carrying
+their logical line and character offsets, so a selection spanning a wrap comes
+out right without either side knowing about the other. Checked with `--shot`,
+including a deliberate across-the-wrap case.
+
+**Linewise fills the row edge to edge**, decided by looking at it: highlighting
+only as far as the text made `V` indistinguishable from `v` over the same
+characters, and made an empty line in the range invisible.
+
+`SELECT` is `0x2E3A4B`, dark enough to read unmodified `FG` text through. An
+accent wash bright enough to notice made the glyphs on top of it worse.
+
+The yank notice now says how much was copied rather than "scratchpad copied to
+clipboard" — a yank whose range was not what you meant looks identical otherwise.
+
+153 tests, clippy clean.
+
+**Not built:** word motions. There is no `w`/`b`/`e`, so `dw` is not a thing.
+Nothing depends on it; it is just absent, and `dw` will silently abort like any
+other non-motion until it exists.
+
+## AUTO-HIDE ON FOCUS LOST — DEFERRED, NOT REJECTED — 2026-08-16 (user)
+
+The user, on the panel staying visible after focus leaves: "I don't personally
+have a problem with it... I understand that this usage is not necessarily normal
+for others, so we could make it a setting if we wanted to."
+
+**Decided: not building it now.** Recorded so it is not re-argued from scratch.
+
+The usual reason to build early does not apply. `wl_keyboard.leave` is a stable
+Wayland event and the handler already exists and is already surface-matched — it
+only prints under `DROPKICK_TRACE` today. This is not one of the retrofit-hostile
+things like Alt-switching or the Esc ladder where deciding late means unpicking
+something. It is the same fifteen lines whenever it is wanted.
+
+Against building it: it would be a default-off branch that the only user never
+runs, so it rots silently and nothing notices — the same shape of problem as a
+settings file that swallows `timer.sond = false`.
+
+The `timer.show_panel` precedent is real but different in kind. That panel was
+already built and working when it was turned off by default, so the setting
+preserved work rather than creating it. This would be new code for a
+hypothetical person.
+
+**If it is ever wanted**, the whole change is:
+
+- `Dropkick::leave` in `dropkick-linux/src/main.rs` — already surface-matched,
+  call the hide path there.
+- one `key = value` bool in the config, parsed and tested in core, plus its line
+  and comment in the default file written on first run.
+
+**Checked, so it does not have to be checked again:** the alarm path cannot
+auto-hide out from under you. `show_for_alarm` reuses the same layer surface but
+maps it `KeyboardInteractivity::None`, and a surface that is never given the
+keyboard never receives `enter`, so it never receives `leave` either.
+
+**Open question if it is ever built**, and the thing that would decide whether it
+is pleasant: whether transient surfaces — notification popups, OSD, menus —
+produce spurious `leave`/`enter` pairs on cosmic-comp. If they do, the panel
+would vanish for reasons invisible to the user. `DROPKICK_TRACE=1` already prints
+every leave, so this is answerable by running the daemon in a terminal and using
+the machine normally. Not measured yet.
+
+## BUILT 2026-08-16 — Generate (passwords and UUIDs)
+
+The fifth tool. Chosen because it needed no new platform capability, which held
+up: **no dependency was added** — the randomness comes from `std::fs` reading
+`/dev/urandom`. (The crate count in the handoff was not re-verified here;
+`cargo-deny` is not installed on this machine, so `deny.toml` was not run.)
+
+**Scope was cut deliberately, by the user: passwords and UUIDs now, hashes
+later.** Hashes need a from-scratch SHA-256 in core, which is real but not risky
+work; what made them wait is that "hash what?" is a product question. **Answered
+and recorded so it need not be asked again: the input is the current clipboard
+contents.**
+
+### The trap here was the Clipboard, not the keymap
+
+`set_clipboard` recorded *every* copy into clipboard history. A generated
+password would therefore have landed in the `alt+w` list — flatly contradicting
+the promise this tool makes, and doing it silently.
+
+The mechanism to stop it already existed: `Clipboard::record` refuses anything
+carrying `x-kde-passwordManagerHint`. So a generated secret is now offered with
+that mime, which **both** keeps it out of our history and asks every other
+clipboard manager on the system to skip it.
+
+That is a **separate `Request` variant**, `SetClipboardSecret`, rather than a
+boolean on the existing one. A flag can be forgotten at a call site; a variant
+cannot be passed by accident. There is a test asserting the secret path never
+emits a plain `SetClipboard`, because that single substitution is the whole
+difference between this tool being safe and being theatre.
+
+### Randomness
+
+Enters as a parameter and is never read inside core, exactly as time does. The
+platform fills a pool from `/dev/urandom` — the right source for keys on Linux,
+no dependency, `std::fs` only. **If it cannot be read, nothing is generated**;
+there is no weaker fallback, because a password generator that quietly degrades
+is worse than one that fails.
+
+The pool is topped up whenever it drops below 256 bytes, so a 128-character
+password can never find itself half-generated and out of randomness. Requests
+for a refill are raised only when Generate is the active tool — the first
+version asked on every tool switch, which a Calculator test caught by finding an
+`Entropy` request in its way.
+
+**Rejection sampling, not modulo.** With 62 characters, `byte % 62` makes the
+first eight ~1.6% likelier than the rest. Small, but it is a bias in a password
+generator and costs four lines to remove. There is a test that feeds only the
+bytes which must be rejected and proves they were skipped rather than folded
+down.
+
+### Keymap, and the `s` lesson applied
+
+The handoff warned that `p`/`u`/`h` could each be a mode *and* a character
+class. Splitting them by case and symbol keeps every key meaning one thing:
+
+```
+p u        password / UUID
+a A 0 !    toggle lowercase, uppercase, digits, symbols
+x          toggle "no lookalikes" (l I 1 O 0)
++ -        length
+r space    regenerate
+y enter    copy
+```
+
+The password-only keys return `Ignored` in UUID mode rather than doing something
+approximate, and there is a test for it.
+
+### Decided while building
+
+- **Nothing survives a summon.** `on_enter` clears the value unconditionally,
+  whichever tab the panel returns to. A password on screen from twenty minutes
+  ago is a hazard, not a convenience.
+- **Never show a short password.** Running out of randomness clears the value
+  and says so. A truncated password that looks fine is the worst outcome
+  available.
+- **An empty panel always says why** — no classes selected, or everything
+  excluded by `x`. Silence would read as a crash.
+- **Settings are spelled out under the value** ("20 characters   a-z A-Z 0-9
+  symbols") rather than shown as toggles, so the state of the thing on screen is
+  readable without knowing the keymap.
+- The symbol set omits quotes, backslashes and backticks. They are what shells,
+  CSV and web input validation mangle.
+- Config parses its first non-boolean value here. A `generate.length` that is
+  not a number is **reported like an unknown key**, not silently defaulted —
+  same rule and same reason as `timer.sond`.
+
+173 tests, clippy clean. Checked with `--shot`; the sample seed is scattered
+rather than `0,1,2,...`, because sequential bytes map to sequential alphabet
+indices and produce `abcdefghij...`, which is correct and looks broken.
+
+## deny.toml WAS NOT BEING RUN — 2026-08-16 (user)
+
+`cargo-deny` was not installed on this machine. The file that mechanically
+enforces "Dropkick has no networking code" had therefore never been executed
+here — it was documentation wearing enforcement's clothes. Installed and run;
+three things fell out.
+
+**1. The `mio` ban had a hole.** The entry was
+`{ name = "mio", wrappers = ["calloop"] }` — banned *unless* it arrived via
+calloop, which needed it for its event loop. mio speaks TCP and UDP, so the
+central claim had a carve-out for exactly the kind of crate the file exists to
+keep out.
+
+calloop 0.14 no longer uses mio and it is gone from the tree entirely, which is
+what surfaced this: cargo-deny warned that the wrapper matched nothing. **The
+exception is removed and the ban is now absolute.** Strictly stronger than
+before, and the reason it was safe to tighten is that nothing depends on it any
+more.
+
+**2. `ttf-parser` is unmaintained** (RUSTSEC-2026-0192), via `fontdue`, which is
+still on 0.9.4 and still depends on it. No upgrade resolves it; only replacing
+the rasteriser would.
+
+**Accepted knowingly by the user**, recorded in `deny.toml` with the reasoning
+and with the conditions that should reopen it. The argument: it is a font
+parser, fonts come from the OS, and an attacker who can write to font
+directories is already past everything in the README's threat model.
+"Unmaintained" is a maintenance notice, not a vulnerability — what it actually
+means is that this one would not be fixed upstream if something were found.
+
+Exceptions go in the `ignore` list with a reason. The check is never switched
+off: a permanently red `cargo deny check` trains everyone to ignore it, which is
+the exact failure this file exists to prevent. All four checks — advisories,
+bans, licenses, sources — pass.
+
+**3. Nothing ran this automatically — now something does.** A pre-commit hook
+lives in `.githooks/pre-commit`, in the repository rather than in `.git/hooks`,
+so it survives a clone and can be read before it is trusted. Enabled with
+`git config core.hooksPath .githooks`.
+
+Decisions in the hook, each of them a way it could have been useless:
+
+- **It fails when `cargo-deny` is missing**, rather than skipping. A hook that
+  quietly passes when its tool is absent reproduces exactly the state this whole
+  entry is about.
+- **It runs `--offline`.** A check that enforces "this program cannot use the
+  network" must not itself require the network before you can commit, and
+  commits have to work on a train. `bans`, `licenses` and `sources` only ever
+  read `Cargo.lock`; only `advisories` wanted the database. The cost is that the
+  database is as fresh as the last `cargo deny fetch`, which is written down in
+  the hook.
+- **It has to be turned on per clone.** Git does not enable a repository's own
+  hooks, and should not — a repo that ran code on checkout would be a hazard.
+  The consequence worth knowing: an unset `core.hooksPath` looks identical to
+  everything passing.
+- Measured: 0.27s offline, 0.57s online. Not enough to make anyone want to
+  bypass it, which is the other way hooks die.
+
+**And a fourth thing, found by running it.** The hook put five
+`license-not-encountered` warnings in front of every commit — the allowlist
+names licences that would be acceptable if they turned up, not only those
+present. Left alone it would have trained the eye to skip the hook's output,
+which is the failure this file exists to prevent. `unused-allowed-license =
+"allow"` silences that class specifically, keeping the allowlist
+forward-looking. This reverses a decision made an hour earlier to leave the
+warnings be: harmless in a manual run, corrosive in a per-commit gate.
+
+Verified rather than assumed: the clean path exits 0, a missing `cargo-deny`
+exits 1 with instructions, and a banned crate makes cargo-deny exit 2 — which
+the hook's `if !` catches.
+
+A harmless leftover, deliberately not changed: `MPL-2.0` and `Unicode-3.0` are
+allowed licenses that nothing in the tree currently uses. cargo-deny warns about
+each. Removing them would silence the warning and cost a re-add the first time
+such a crate legitimately appears, so they stay.
+
+## LICENSING MADE EXPLICIT — 2026-08-18 (user)
+
+`Cargo.toml` said `license = "MIT"` and there was no `LICENSE` file, and nothing
+recorded what the 59 dependencies oblige. For a project whose README invites a
+stranger to check its claims, both were conspicuous gaps.
+
+Added: `LICENSE` (MIT, **copyright 2026 Brand Gamblin**) and
+`THIRD-PARTY-NOTICES.md`, generated from `cargo metadata` so it can be rebuilt
+rather than maintained by hand. The command is in the file's own header; a
+notices file that drifts from the tree is worse than none.
+
+### What the tree actually obliges
+
+Read from the SPDX expressions, not the grouped summary — the grouping loses the
+distinction that matters.
+
+- **28 crates offer `MIT OR Apache-2.0`** (plus variants with Zlib or the LLVM
+  exception). `OR` means the distributor elects. **Dropkick elects MIT**, and the
+  original expression is preserved in the table so a redistributor can elect
+  differently — Apache-2.0 would give them its express patent grant at the cost
+  of its notice requirements.
+- **Three cannot be elected away:** MIT (21 crates offer no alternative), Zlib
+  (`foldhash`), and Unicode-3.0 (`unicode-ident` is
+  `(MIT OR Apache-2.0) **AND** Unicode-3.0` — the `AND` means it applies *on top
+  of* whichever is elected, not instead of one). That `AND` is the thing a
+  glance at the licence list misses.
+- **Nothing is copyleft.** No GPL, LGPL, AGPL or MPL, so distributing Dropkick
+  carries no source-publication obligation and no share-alike on its own code.
+
+Apache-2.0's text is deliberately **not** reproduced: every Apache crate here is
+dual-licensed and MIT is elected, so its text is not in force. The notices file
+says so and links it, rather than padding itself with 11kB nobody needs.
+
+Counts in the file were checked against `cargo metadata` rather than asserted:
+59 dependencies, 21 MIT-only, 1 Zlib-only.
+
+**Not legal advice, and the log should not pretend otherwise** — this is a
+reading of well-known licence terms, recorded so the reasoning is visible if it
+ever needs revisiting by someone qualified.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

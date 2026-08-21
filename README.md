@@ -11,7 +11,8 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. Four tools built: Scratchpad, Clipboard, Calculator and Timer. The rest
+Pre-alpha. Five tools built: Scratchpad, Clipboard, Calculator, Timer and
+Generate. The rest
 show as dimmed tabs already holding their permanent keys, so nothing renumbers
 when they arrive.
 
@@ -69,7 +70,18 @@ promised:
 
 * `dropkick-core` is `#![forbid(unsafe_code)]` and has zero dependencies.
 * `deny.toml` fails the build if any crate capable of opening a socket enters
-  the dependency tree.
+  the dependency tree. A pre-commit hook runs it, so the check happens whether
+  or not anyone remembers to:
+
+  ```
+  cargo install cargo-deny
+  git config core.hooksPath .githooks   # once per clone
+  ```
+
+  Git will not enable a hook from a cloned repository on its own, which is the
+  right default — a repository that could run code on checkout would be a
+  problem. So that second line is deliberate, and the hook is in `.githooks/`
+  where you can read it before you turn it on.
 * Planned: a seccomp filter that denies `socket()` for `AF_INET`/`AF_INET6` at
   startup, so the process cannot open a network connection even if something
   slipped through. `AF_UNIX` stays permitted — the Wayland connection needs it.
@@ -120,6 +132,13 @@ restart and no reload command to remember.
 timer.notify = true      # notify when a countdown finishes
 timer.sound = true       # ask the server to play a sound with it
 timer.show_panel = false # also bring the panel up (off: it covers the screen)
+
+generate.length = 20     # default password length
+generate.lower = true    # a-z
+generate.upper = true    # A-Z
+generate.digits = true   # 0-9
+generate.symbols = true  # !@#$%^&*-_=+?
+generate.exclude_ambiguous = false   # leave out l I 1 O 0
 ```
 
 ## Where your data lives
@@ -254,7 +273,7 @@ and a key never moves once assigned:
 | `Alt+E` | Calculator | built — expressions, units, date maths |
 | `Alt+R` | Calendar | planned |
 | `Alt+T` | Timer/Stopwatch | built — countdown, stopwatch, notification |
-| `Alt+Y` | Generate | planned — passwords, UUIDs, hashes |
+| `Alt+Y` | Generate | built — passwords and UUIDs; hashes planned |
 | `Alt+U` | Color | planned — converter and eyedropper |
 | `Alt+I` `Alt+O` `Alt+P` | — | deliberately unspent |
 
@@ -279,12 +298,34 @@ keyboard, but it does cover the top of the screen, and a notification that waits
 for you is usually enough. Turn on `timer.show_panel` if you want an alarm that
 is unmissable rather than merely patient.
 
-Scratchpad is vi-flavoured without being a vi clone: `i` `a` `A` `o` enter insert
-mode, `Esc` leaves it, `hjkl` and `0` `$` move, `x` cuts, `u` undoes, `y` copies
-the whole buffer to the clipboard — which is how you get text out without
-Dropkick ever growing a file picker. Undo is
-per *burst*, not per character, so one `u` takes back a whole typing run — which
-is also what makes a keystroke that landed before you saw the panel recoverable.
+Scratchpad is vi-flavoured without being a vi clone. `i` `a` `A` `o` enter insert
+mode and `Esc` leaves it; `hjkl` `0` `$` `gg` `G` move; `x` cuts a character and
+`u` undoes.
+
+Selection and the operators follow vi, so if you know vi you already know them:
+`v` selects by character and `V` by line, `d` and `y` cut and copy either a
+selection or a motion — `dd`, `yy`, `dG`, `ggdG` to wipe the lot. `Esc` unwinds
+one level at a time: selection, then mode, then the panel.
+
+**`Y` is the one place this departs from vi.** It copies the *whole buffer*,
+where vi would copy one line. That is how you get text out of Dropkick without it
+ever growing a file picker, and it is common enough here to be worth a single
+key. If your fingers expect vi's `Y`, use `yy`.
+
+Undo is per *burst*, not per character, so one `u` takes back a whole typing run
+— which is also what makes a keystroke that landed before you saw the panel
+recoverable.
+
+Generate makes passwords and UUIDs. `p` and `u` pick which; for a password, `a`
+`A` `0` `!` toggle the character types, `x` leaves out the lookalikes (`l I 1 O
+0`), `+` and `-` change the length, `r` makes a new one and `y` copies it.
+
+**Nothing it generates is stored.** There is no history, and the value is gone
+when the panel closes. Copying a password does *not* put it in Dropkick's
+clipboard history, and it goes onto the system clipboard tagged as a password so
+that other clipboard managers skip it too. Randomness comes from the kernel
+(`/dev/urandom`); if that cannot be read, Dropkick generates nothing rather than
+falling back to something weaker.
 
 ## Trying the probe
 
@@ -316,3 +357,15 @@ crates/dropkick-linux    Wayland/COSMIC adapter, daemon, dropkickctl
 
 A `dropkick-windows` crate joins them later. The core never learns what platform
 it is on.
+
+## Licence
+
+Dropkick is MIT licensed — see `LICENSE`. Do what you like with it; keep the
+copyright notice.
+
+The 59 crates compiled in carry their own licences, listed in
+`THIRD-PARTY-NOTICES.md` with the texts that apply. The short version: all
+permissive, nothing copyleft, so nothing here obliges you to publish your own
+source if you build on it. Most offer a choice of MIT or Apache-2.0 and Dropkick
+elects MIT; two licences cannot be elected away, `Zlib` via `foldhash` and
+`Unicode-3.0` via `unicode-ident`, and both are satisfied by shipping that file.
