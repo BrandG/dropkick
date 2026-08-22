@@ -11,8 +11,8 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. Five tools built: Scratchpad, Clipboard, Calculator, Timer and
-Generate. The rest
+Pre-alpha. Six tools built: Scratchpad, Clipboard, Calculator, Calendar, Timer
+and Generate. The rest
 show as dimmed tabs already holding their permanent keys, so nothing renumbers
 when they arrive.
 
@@ -141,6 +141,42 @@ generate.symbols = true  # !@#$%^&*-_=+?
 generate.exclude_ambiguous = false   # leave out l I 1 O 0
 ```
 
+Calendar shows a month at a time. `hjkl` or the arrows move a day at a time,
+`[` and `]` step months, `t` jumps back to today, and a dot marks any day
+holding something. `a` adds an entry: type what it is, press enter, then type
+when — `15:00`, `3pm`, or leave it blank for an all-day item. `Tab` moves into
+the day's list so `d` can delete one.
+
+**It will not guess at a time.** If you type something that could be either,
+like a bare `3`, it asks whether you meant 03:00 or 15:00 rather than picking
+one and being quietly wrong.
+
+The Calculator does arithmetic, unit conversion and date maths on the same line.
+
+```
+437*1.18              = 515.66
+sqrt(2)*3             = 4.2426406871
+25 feet in furlongs   = 0.0378787879 furlongs
+98.6 F in C           = 37 C
+today + 90 days       = 2026-11-20 (Friday)
+2026-12-25 - today    = 125 days
+```
+
+`in` and `to` both work. Length, mass, volume, time, data, angle and
+temperature are covered, and a conversion can take an expression: `(20+5) ft in
+m`. `ans` reuses the last numeric answer.
+
+Two places where a plausible-looking answer would be wrong, so the ambiguous
+name refuses to be guessed at:
+
+* **`gal` and `pt` are US measures**, which differ from the UK ones by about
+  20%. The imperial versions are `impgal` and `imppt`.
+* **`kb` is 1000 bytes.** For 1024 use `kib`, and likewise `mib` and `gib`.
+
+There is no `month` or `year` unit, because neither is a fixed length. Months
+and years exist in date maths, where a calendar makes the answer well-defined —
+`2026-01-31 + 1 month` is the 28th of February, not the 3rd of March.
+
 ## Where your data lives
 
 These are your files. Go look at them, back them up yourself, delete them
@@ -148,8 +184,23 @@ yourself.
 
 ```
 ~/.local/share/dropkick/     things kept between sessions   (dir 0700, files 0600)
+  calendar.txt               your entries, one per line, editable by hand
 $XDG_RUNTIME_DIR/dropkick/   things wiped when you log out  (tmpfs, private)
 ```
+
+The calendar file is plain text and sorts correctly with `sort`:
+
+```
+2026-08-21 15:00 Dentist
+2026-08-21 --:-- Bin day
+```
+
+Edit it in any editor. A line Dropkick cannot understand is **kept, not
+discarded** — it is written back untouched and reported, so a typo costs you
+nothing.
+
+Writes go to a temporary file that is renamed into place, so losing power
+mid-save cannot leave you with half a calendar.
 
 Nothing goes in `/tmp`: it is shared with every local user, so filenames are
 visible there even when contents are not.
@@ -270,8 +321,8 @@ and a key never moves once assigned:
 |---|---|---|
 | `Alt+Q` | Scratchpad | built — notes, text transforms |
 | `Alt+W` | Clipboard | built — history, search, pinning |
-| `Alt+E` | Calculator | built — expressions, units, date maths |
-| `Alt+R` | Calendar | planned |
+| `Alt+E` | Calculator | built — arithmetic, functions, unit conversion, date maths |
+| `Alt+R` | Calendar | built — month grid, timed and all-day entries |
 | `Alt+T` | Timer/Stopwatch | built — countdown, stopwatch, notification |
 | `Alt+Y` | Generate | built — passwords and UUIDs; hashes planned |
 | `Alt+U` | Color | planned — converter and eyedropper |

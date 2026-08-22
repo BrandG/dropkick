@@ -30,6 +30,7 @@ use dropkick_core::key::{Key as DkKey, KeyPress, Mods};
 use dropkick_linux::font::{Canvas, TextRenderer};
 use dropkick_linux::render::{self, HEIGHT, WIDTH};
 use dropkick_linux::ipc;
+use dropkick_linux::{storage, tz};
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
@@ -136,6 +137,8 @@ struct Dropkick {
     big: TextRenderer,
     /// Live while the timer runs, dropped when it stops.
     tick_token: Option<RegistrationToken>,
+    /// The pending debounced calendar write, if one is armed.
+    calendar_token: Option<RegistrationToken>,
     /// True between asking for exclusive focus and actually getting it.
     grabbed_exclusive: bool,
     mods: Mods,
@@ -206,6 +209,14 @@ impl Dropkick {
             // applies silently is indistinguishable from one that did not.
             self.app.notice = Some("settings reloaded".to_string());
         }
+        // The daemon can be up for days, so the calendar's idea of "today" has
+        // to be refreshed rather than fixed at startup. set_today only moves
+        // the focus if it was already sitting on today.
+        let (today, _) = tz::today_local();
+        self.app.calendar.set_today(today);
+        // The Calculator needs it too, for `today + 90 days`.
+        self.app.calculator.today = Some(today);
+
         // Push the generator's settings across every summon, not only when the
         // file changed: it is the same "the moment the user is present" hook,
         // and it costs a struct copy.
@@ -288,6 +299,10 @@ impl Dropkick {
         if self.phase == Phase::Hidden {
             return;
         }
+        // One of the three save triggers. Closing the panel is the moment the
+        // user considers themselves done, so waiting out the debounce would be
+        // gambling with work they think is already put away.
+        self.save_calendar_now();
         match self.strategy {
             Strategy::Recreate => {
                 // Dropping destroys zwlr_layer_surface_v1 and its wl_surface.
@@ -515,6 +530,63 @@ impl Dropkick {
         let _ = self.conn.flush();
     }
 
+    /// Load the calendar from disk, and tell the user today's date.
+    ///
+    /// Done once at startup rather than per summon: the file is ours, nothing
+    /// else writes it, and re-reading on every summon would undo unsaved edits
+    /// still sitting inside the debounce window.
+    fn load_calendar(&mut self) {
+        let (today, from_file) = tz::today_local();
+        self.app.calendar.set_today(today);
+        self.app.calculator.today = Some(today);
+        if !from_file {
+            eprintln!("dropkickd: could not read /etc/localtime; dates are UTC and may be a day out");
+        }
+        let Some(path) = storage::calendar_path() else { return };
+        if let Some(text) = storage::read(&path) {
+            let bad = self.app.calendar.load(&text);
+            if bad > 0 {
+                // Say so rather than swallowing it: those lines are being kept,
+                // not understood, and the user is the only one who can fix them.
+                eprintln!("dropkickd: {bad} calendar line(s) not understood; kept as-is");
+                self.app.notice = Some(format!("{bad} calendar line(s) not understood"));
+            }
+        }
+    }
+
+    /// Write the calendar now, if it has unsaved changes.
+    fn save_calendar_now(&mut self) {
+        if !self.app.calendar.dirty {
+            return;
+        }
+        let Some(path) = storage::calendar_path() else { return };
+        match storage::write_atomic(&path, &self.app.calendar.serialise()) {
+            Ok(()) => self.app.calendar.dirty = false,
+            // Keep `dirty` set so the next trigger tries again rather than
+            // dropping the change on the floor.
+            Err(e) => eprintln!("dropkickd: could not save the calendar: {e}"),
+        }
+        self.calendar_token = None;
+    }
+
+    /// Save ~2s after the last edit. Each new edit pushes the write back, so a
+    /// burst of typing costs one write rather than one per keystroke.
+    fn schedule_calendar_save(&mut self) {
+        if let Some(tok) = self.calendar_token.take() {
+            self.handle.remove(tok);
+        }
+        self.calendar_token = self
+            .handle
+            .insert_source(
+                Timer::from_duration(Duration::from_secs(2)),
+                |_, _, state: &mut Dropkick| {
+                    state.save_calendar_now();
+                    TimeoutAction::Drop
+                },
+            )
+            .ok();
+    }
+
     /// Randomness for Generate, straight from the kernel CSPRNG.
     ///
     /// `/dev/urandom` rather than a crate: `dropkick-core` has no dependencies
@@ -540,6 +612,7 @@ impl Dropkick {
                 Request::SetClipboard(text) => self.set_clipboard(text, false, qh),
                 Request::SetClipboardSecret(text) => self.set_clipboard(text, true, qh),
                 Request::Entropy(n) => self.supply_entropy(n),
+                Request::SaveCalendar => self.schedule_calendar_save(),
             }
         }
     }
@@ -775,7 +848,10 @@ fn main() {
                     ipc::Cmd::Show => state.show(),
                     ipc::Cmd::Hide => state.hide(),
                     ipc::Cmd::Toggle => state.toggle(),
-                    ipc::Cmd::Quit => state.exit = true,
+                    ipc::Cmd::Quit => {
+                        state.save_calendar_now();
+                        state.exit = true;
+                    }
                 }
             }
         })
@@ -800,6 +876,7 @@ fn main() {
         text,
         big,
         tick_token: None,
+        calendar_token: None,
         grabbed_exclusive: false,
         mods: Mods::default(),
         started: Instant::now(),
@@ -827,6 +904,18 @@ fn main() {
     // Clipboard capture starts with the daemon, not with the panel: history you
     // only collect while the window is open is not history.
     state.init_clipboard(&qh);
+
+    // The config directory predates the storage module and was created with
+    // whatever the umask gave -- 0775/0664 on this machine, so world-readable.
+    // Nothing secret is in it, but the project claims its files are private.
+    if let Some(dir) = dropkick_linux::settings::config_path().and_then(|p| p.parent().map(|d| d.to_path_buf())) {
+        if let Err(e) = storage::tighten(&dir) {
+            eprintln!("dropkickd: could not tighten {}: {e}", dir.display());
+        }
+    }
+
+    // Read the calendar off disk before the first summon can show it.
+    state.load_calendar();
 
     // Seed the generator's pool now rather than on first use, so the first
     // password costs no file open at the moment someone is waiting for it.
@@ -972,7 +1061,20 @@ fn shots(prefix: &str) -> std::io::Result<()> {
         (
             "calculator",
             Box::new(|app: &mut App| {
-                for (expr, enter) in [("437*1.18", true), ("sqrt(2)*3", true), ("453/17", false)] {
+                // Switch to the tab explicitly. This scene used to rely on the
+                // Calculator being the default, and silently became a picture
+                // of an empty Scratchpad the day the default changed -- with
+                // the broken image committed and shown in the README.
+                app.on_key(KeyPress::alt('e'), 0);
+                app.calculator.today = Some(dropkick_core::date::Date::new(2026, 8, 22));
+                for (expr, enter) in [
+                    ("437*1.18", true),
+                    ("25 feet in furlongs", true),
+                    ("98.6 F in C", true),
+                    ("today + 90 days", true),
+                    ("2026-12-25 - today", true),
+                    ("453/17", false),
+                ] {
                     for c in expr.chars() {
                         app.on_key(KeyPress::ch(c), 0);
                     }
@@ -1089,6 +1191,47 @@ everywhere.";
                 for _ in 0..80 {
                     app.on_key(KeyPress::ch('l'), 0);
                 }
+            }),
+        ),
+        (
+            "calculator-error",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('e'), 0);
+                for c in "25 feet in furlongs".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+            }),
+        ),
+        (
+            "calendar",
+            Box::new(|app: &mut App| {
+                use dropkick_core::date::Date;
+                app.on_key(KeyPress::alt('r'), 0);
+                // A fixed date, so the frame is identical run to run.
+                app.calendar.set_today(Date::new(2026, 8, 21));
+                app.calendar.focus = Date::new(2026, 8, 21);
+                app.calendar.add(Date::new(2026, 8, 21), Some(9 * 60), "Standup");
+                app.calendar.add(Date::new(2026, 8, 21), Some(15 * 60), "Dentist");
+                app.calendar.add(Date::new(2026, 8, 21), None, "Bin day");
+                app.calendar.add(Date::new(2026, 8, 4), Some(12 * 60), "Lunch with Dana");
+                app.calendar.add(Date::new(2026, 8, 27), None, "Rent due");
+                app.calendar.add(Date::new(2026, 8, 28), Some(18 * 60 + 30), "Flight");
+            }),
+        ),
+        (
+            "calendar-ambiguous-time",
+            Box::new(|app: &mut App| {
+                use dropkick_core::date::Date;
+                app.on_key(KeyPress::alt('r'), 0);
+                app.calendar.set_today(Date::new(2026, 8, 21));
+                app.calendar.focus = Date::new(2026, 8, 21);
+                for c in "aDentist".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                app.on_key(KeyPress::ch('3'), 0);
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
             }),
         ),
         (

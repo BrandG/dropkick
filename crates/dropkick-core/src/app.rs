@@ -6,6 +6,7 @@
 //! A retired tool's key stays retired.
 
 use crate::calculator::Calculator;
+use crate::calendar::Calendar;
 use crate::clipboard::{Clipboard, Outcome};
 use crate::generate::{Generate, Outcome as GenOutcome};
 use crate::key::{Key, KeyPress};
@@ -42,7 +43,7 @@ pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Scratchpad, name: "Scratchpad", key: 'q', built: true },
     Tool { id: ToolId::Clipboard, name: "Clipboard", key: 'w', built: true },
     Tool { id: ToolId::Calculator, name: "Calculator", key: 'e', built: true },
-    Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: false },
+    Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: true },
     Tool { id: ToolId::Timer, name: "Timer", key: 't', built: true },
     Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: true },
     Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
@@ -64,6 +65,9 @@ pub enum Request {
     /// Top the Generate pool up with this many bytes of OS randomness. Raised
     /// by the core because the core has no way to read any.
     Entropy(usize),
+    /// The calendar changed. The platform debounces this and writes the file;
+    /// the core neither knows where it lives nor when the write happens.
+    SaveCalendar,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -83,6 +87,7 @@ pub struct App {
     pub clipboard: Clipboard,
     pub timer: Timer,
     pub generate: Generate,
+    pub calendar: Calendar,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -99,6 +104,7 @@ impl Default for App {
             clipboard: Clipboard::new(),
             timer: Timer::new(),
             generate: Generate::new(),
+            calendar: Calendar::new(),
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -119,7 +125,7 @@ impl App {
     /// reminders" row.
     pub fn hints(&self) -> &'static str {
         match self.active {
-            ToolId::Calculator => "expression + enter =   ans reuses last   alt+h/l tabs   esc x",
+            ToolId::Calculator => "2+2   25 ft in m   today + 90 days   ans reuses last   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
                 crate::scratchpad::Mode::Insert => "INSERT   esc or ctrl-c leaves",
                 crate::scratchpad::Mode::Visual => "VISUAL   d cut   y copy   hjkl gg G extend   esc back",
@@ -142,6 +148,15 @@ impl App {
                 crate::generate::Kind::Uuid => "p password   r new   y copy   esc x",
                 crate::generate::Kind::Password => {
                     "u uuid  a A 0 ! types  x lookalikes  +- length  r new  y copy"
+                }
+            },
+            ToolId::Calendar => match self.calendar.mode {
+                crate::calendar::Mode::Text => "type what it is   enter for the time   esc cancels",
+                crate::calendar::Mode::Time => "15:00 or 3pm, blank for all day   enter   esc back",
+                crate::calendar::Mode::Disambiguate(_) => "a morning   p afternoon   esc back",
+                crate::calendar::Mode::List => "jk pick   d delete   esc back to the month",
+                crate::calendar::Mode::Grid => {
+                    "hjkl move  [ ] month  t today  a add  tab entries  esc x"
                 }
             },
             ToolId::Timer => {
@@ -194,6 +209,7 @@ impl App {
         // back, whichever tab it comes back to. Asking for randomness is not --
         // every other tool would otherwise queue a refill it has no use for.
         self.generate.on_enter();
+        self.calendar.on_enter();
         if self.active == ToolId::Generate {
             self.ask_for_entropy();
         }
@@ -268,6 +284,7 @@ impl App {
             let descended = match self.active {
                 ToolId::Scratchpad => self.scratchpad.leave_one_level(),
                 ToolId::Clipboard => self.clipboard.leave_one_level(),
+                ToolId::Calendar => self.calendar.leave_one_level(),
                 _ => false,
             };
             return if descended { Response::Redraw } else { Response::Dismiss };
@@ -303,6 +320,16 @@ impl App {
             }
             ToolId::Timer => {
                 if self.timer.on_key(press, now_ms) {
+                    Response::Redraw
+                } else {
+                    Response::Ignored
+                }
+            }
+            ToolId::Calendar => {
+                if self.calendar.on_key(press) {
+                    if self.calendar.dirty {
+                        self.pending.push(Request::SaveCalendar);
+                    }
                     Response::Redraw
                 } else {
                     Response::Ignored
@@ -399,10 +426,19 @@ mod tests {
 
     #[test]
     fn unbuilt_tools_keep_their_key_and_say_so() {
+        // Color, not Calendar: Calendar was the example here until it was
+        // built, which is the point of the test -- the key stays put either way.
         let mut app = App::new();
-        assert_eq!(app.on_key(KeyPress::alt('r'), 0), Response::Redraw);
+        assert_eq!(app.on_key(KeyPress::alt('u'), 0), Response::Redraw);
         assert_eq!(app.active, ToolId::Scratchpad, "an unbuilt tab must not steal focus");
-        assert!(app.notice.as_deref().unwrap().contains("Calendar"));
+        assert!(app.notice.as_deref().unwrap().contains("Color"));
+    }
+
+    #[test]
+    fn the_calendar_tab_is_reachable_now_that_it_is_built() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('r'), 0);
+        assert_eq!(app.active, ToolId::Calendar);
     }
 
     #[test]

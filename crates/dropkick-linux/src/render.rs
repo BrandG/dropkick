@@ -57,6 +57,7 @@ pub fn draw(
         ToolId::Clipboard => draw_clipboard(app, text, canvas, content_top, content_bottom),
         ToolId::Timer => draw_timer(app, text, big, now_ms, canvas, content_top, content_bottom),
         ToolId::Generate => draw_generate(app, text, big, canvas, content_top, content_bottom),
+        ToolId::Calendar => draw_calendar(app, text, canvas, content_top, content_bottom),
         _ => {
             let y = (content_top + content_bottom) as f32 / 2.0;
             let msg = "not built yet";
@@ -124,7 +125,12 @@ fn draw_calculator(
     bottom: i32,
 ) {
     let lh = text.line_height();
-    let input_baseline = bottom as f32 - lh * 0.6;
+    // The error sits *below* the input, so the input has to move up to make
+    // room for it. Without this the message is drawn past `bottom`, where the
+    // hint row and the panel edge clip it: you get a couple of red pixels and
+    // no idea what went wrong.
+    let (input_baseline, err_baseline) =
+        calculator_lines(bottom as f32, lh, app.calculator.error.is_some());
 
     // History grows upward from just above the input line, newest nearest.
     let mut y = input_baseline - lh * 1.8;
@@ -159,8 +165,8 @@ fn draw_calculator(
         ACCENT,
     );
 
-    if let Some(err) = &app.calculator.error {
-        text.draw(canvas, PAD, input_baseline + lh, err, ERR);
+    if let (Some(err), Some(y)) = (&app.calculator.error, err_baseline) {
+        text.draw(canvas, PAD, y, err, ERR);
     }
 }
 
@@ -348,6 +354,155 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Where the calculator's input line and error line sit, given the bottom of
+/// the content area. Split out from the drawing so the arithmetic can be
+/// tested: an error drawn past `bottom` lands under the hint row and off the
+/// panel, which is invisible in every test that only checks state.
+fn calculator_lines(bottom: f32, lh: f32, has_error: bool) -> (f32, Option<f32>) {
+    let err_h = if has_error { lh } else { 0.0 };
+    let input = bottom - lh * 0.6 - err_h;
+    (input, has_error.then_some(input + lh))
+}
+
+fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, _bottom: i32) {
+    use dropkick_core::calendar::Mode;
+    use dropkick_core::date::{format_time, Date, MONTH_NAMES, WEEKDAY_NAMES};
+
+    let c = &app.calendar;
+    let lh = text.line_height();
+    let adv = text.advance();
+
+    // Grid on the left, the focused day's entries on the right. The split is
+    // fixed rather than proportional so the grid does not reflow as entries
+    // come and go.
+    let grid_w = adv * 30.0;
+    let cell_w = grid_w / 7.0;
+    let list_x = PAD + grid_w + adv * 3.0;
+
+    let month = &c.focus;
+    let title = format!("{} {}", MONTH_NAMES[(month.month - 1) as usize], month.year);
+    let mut y = top as f32 + lh * 1.6;
+    text.draw(canvas, PAD, y, &title, FG);
+    y += lh * 1.4;
+
+    for (i, name) in WEEKDAY_NAMES.iter().enumerate() {
+        let x = PAD + i as f32 * cell_w;
+        text.draw(canvas, x, y, name, FAINT);
+    }
+    y += lh * 0.4;
+
+    let first = month.first_of_month();
+    let lead = first.weekday(); // Monday-first
+    let days = Date::days_in_month(month.year, month.month);
+    let mut row_y = y + lh;
+
+    for day in 1..=days {
+        let col = (lead + day - 1) % 7;
+        if col == 0 && day > 1 {
+            row_y += lh * 1.25;
+        }
+        let date = Date::new(month.year, month.month, day);
+        let x = PAD + col as f32 * cell_w;
+        let label = format!("{day:>2}");
+
+        let focused = date == c.focus;
+        if focused {
+            canvas.fill_rect(
+                (x - adv * 0.4) as i32,
+                (row_y - lh * 0.78) as i32,
+                (adv * 2.9) as i32,
+                (lh * 0.95) as i32,
+                if c.mode == Mode::Grid { ACCENT } else { SELECT },
+            );
+        }
+        let colour = if focused && c.mode == Mode::Grid {
+            BG
+        } else if date == c.today {
+            ACCENT
+        } else {
+            FG
+        };
+        text.draw(canvas, x, row_y, &label, colour);
+
+        // A dot under any day holding something, so a month reads at a glance.
+        if c.has_entries(date) {
+            let dot_x = (x + adv * 0.6) as i32;
+            canvas.fill_rect(dot_x, (row_y + lh * 0.18) as i32, 3, 3, if focused && c.mode == Mode::Grid { BG } else { DIM });
+        }
+    }
+
+    // The focused day, and what is on it.
+    let heading = format!(
+        "{} {} {}",
+        WEEKDAY_NAMES[c.focus.weekday() as usize],
+        c.focus.day,
+        MONTH_NAMES[(c.focus.month - 1) as usize]
+    );
+    let mut ly = top as f32 + lh * 1.6;
+    text.draw(canvas, list_x, ly, &heading, if c.focus == c.today { ACCENT } else { FG });
+    ly += lh * 1.8;
+
+    let entries = c.on(c.focus);
+    if entries.is_empty() {
+        text.draw(canvas, list_x, ly, "nothing scheduled", FAINT);
+        ly += lh;
+    }
+    for (i, e) in entries.iter().enumerate() {
+        let selected = c.mode == Mode::List && i == c.selected;
+        if selected {
+            canvas.fill_rect(
+                (list_x - adv * 0.4) as i32,
+                (ly - lh * 0.78) as i32,
+                (canvas.w as f32 - list_x - PAD) as i32,
+                (lh * 0.95) as i32,
+                SELECT,
+            );
+        }
+        // All-day entries line up under the times rather than jutting left.
+        let when = e.time.map_or_else(|| "  -  ".to_string(), format_time);
+        text.draw(canvas, list_x, ly, &when, if e.time.is_some() { ACCENT } else { FAINT });
+        text.draw(canvas, list_x + adv * 6.5, ly, &e.text, FG);
+        ly += lh * 1.2;
+    }
+
+    // Whatever is being typed, and the prompt for it.
+    ly += lh * 0.6;
+    match c.mode {
+        Mode::Text => {
+            let line = format!("what: {}", c.draft_text);
+            let pen = text.draw(canvas, list_x, ly, &line, FG);
+            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+            ly += lh * 1.3;
+            text.draw(canvas, list_x, ly, "enter for the time, esc to cancel", FAINT);
+        }
+        Mode::Time => {
+            text.draw(canvas, list_x, ly, &format!("what: {}", c.draft_text), DIM);
+            ly += lh * 1.3;
+            let line = format!("when: {}", c.draft_time);
+            let pen = text.draw(canvas, list_x, ly, &line, FG);
+            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+            ly += lh * 1.3;
+            match c.problem {
+                Some(msg) => text.draw(canvas, list_x, ly, msg, ERR),
+                None => text.draw(canvas, list_x, ly, "15:00 or 3pm; blank for all day", FAINT),
+            };
+        }
+        Mode::Disambiguate(h) => {
+            text.draw(canvas, list_x, ly, &format!("what: {}", c.draft_text), DIM);
+            ly += lh * 1.3;
+            // Never guess: show both readings and make the user pick one.
+            let q = format!("\"{}\" - which one?", c.draft_time.trim());
+            text.draw(canvas, list_x, ly, &q, FG);
+            ly += lh * 1.3;
+            let am = if h == 12 { 0 } else { h };
+            let pm = if h == 12 { 12 } else { h + 12 };
+            let opts = format!("a  {}        p  {}", format_time(am * 60), format_time(pm * 60));
+            text.draw(canvas, list_x, ly, &opts, ACCENT);
+        }
+        _ => {}
+    }
+}
+
 fn draw_generate(
     app: &App,
     text: &mut TextRenderer,
@@ -489,5 +644,46 @@ fn draw_hints(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
         None => {
             text.draw(canvas, PAD, baseline, app.hints(), DIM);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The bug this pins: the error was drawn at `input + lh`, which is past
+    /// the bottom of the content area, so it rendered under the hint row and
+    /// was clipped by the panel edge. Reported from real use -- every unit test
+    /// passed, because none of them knew where anything was painted.
+    #[test]
+    fn the_calculator_error_stays_inside_the_content_area() {
+        let bottom = (HEIGHT as i32 - HINT_H) as f32;
+        let lh = 23.0;
+        let (input, err) = calculator_lines(bottom, lh, true);
+        let err = err.expect("an error must get a line");
+        assert!(err <= bottom, "error baseline {err} is past the content bottom {bottom}");
+        assert!(input < err, "the error belongs below the input");
+        assert!(input > 0.0);
+    }
+
+    #[test]
+    fn without_an_error_the_input_keeps_its_place_at_the_bottom() {
+        let bottom = (HEIGHT as i32 - HINT_H) as f32;
+        let lh = 23.0;
+        let (input, err) = calculator_lines(bottom, lh, false);
+        assert!(err.is_none());
+        assert!(input <= bottom);
+        // Only the error case shifts things; nothing moves otherwise.
+        assert_eq!(input, bottom - lh * 0.6);
+    }
+
+    #[test]
+    fn an_error_moves_the_input_up_rather_than_overflowing() {
+        let bottom = (HEIGHT as i32 - HINT_H) as f32;
+        let lh = 23.0;
+        let (with, _) = calculator_lines(bottom, lh, true);
+        let (without, _) = calculator_lines(bottom, lh, false);
+        assert!(with < without, "the input has to make room");
+        assert_eq!(without - with, lh);
     }
 }

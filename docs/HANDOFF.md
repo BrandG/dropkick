@@ -14,16 +14,16 @@ maximum forever. `README.md` is the user-facing version.
 One user (Brand), on Pop!_OS 24.04 / COSMIC / Wayland. Windows is a stated
 future target; `dropkick-core` is kept free of anything OS-specific for it.
 
-## State as of 2026-08-16
+## State as of 2026-08-22
 
-Five of seven tools built. 173 tests, clippy clean at zero warnings.
+Six of seven tools built. 233 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
 | `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
-| `alt+e` | Calculator | built — recursive-descent evaluator, functions, `ans` |
-| `alt+r` | Calendar | not built — needs the storage layer |
+| `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
+| `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
 | `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
 | `alt+u` | Color | not built — converter + eyedropper (needs D-Bus signals) |
@@ -114,6 +114,17 @@ existing proves nothing about repeat working.
 clipboard managers to skip it. A separate variant, not a flag, so a call site
 cannot leak one by forgetting.
 
+**`now_ms` is not the wall clock.** It is `Instant::elapsed()` — milliseconds
+since the daemon started. Anything needing a real date uses `tz::today_local()`,
+which reads `/etc/localtime`. UTC is not good enough: local and UTC are on
+different days for several hours every evening in this timezone.
+
+**Never write a file in place.** `storage::write_atomic` writes a temp file
+beside the target and renames it over. The temp must be in the same directory
+(rename is only atomic within a filesystem) and is created `0600` from the
+start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
+on quit.
+
 **`dropkick-core` has zero dependencies and must keep them.** Time enters as a
 `now_ms` parameter, never read inside; that is why expiry and the Esc ladder are
 testable without sleeping. Platform work goes in `dropkick-linux`; the core
@@ -150,10 +161,10 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   testable against published vectors. **Decided: the input is the current
   clipboard contents**, so it needs no new UI beyond a third kind alongside
   `p` and `u`.
-- **Calendar** (`alt+r`) — forces the storage layer to become real: month grid,
-  dots on days with events, arrow navigation, events listed for the focused day.
-  Storage decisions are made and unimplemented (see the log): XDG dirs, `0600`,
-  write on change with debounce, atomic rename.
+- **Repeating calendar entries, and alarms for them** — deliberately left out.
+  An entry with a time is inert; nothing notifies. The Timer already knows how
+  to raise a notification, so wiring one to a calendar entry is small; recurrence
+  is not, and should not be started casually.
 - **Color** (`alt+u`) — converter is trivial; the eyedropper needs
   `org.freedesktop.portal.Screenshot.PickColor`, which uses the portal's
   Request/Response **signal** pattern. The D-Bus client has no signal support

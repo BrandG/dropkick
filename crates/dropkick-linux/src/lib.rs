@@ -6,3 +6,5 @@ pub mod font;
 pub mod settings;
 pub mod ipc;
 pub mod render;
+pub mod storage;
+pub mod tz;

@@ -1216,6 +1216,205 @@ Counts in the file were checked against `cargo metadata` rather than asserted:
 reading of well-known licence terms, recorded so the reasoning is visible if it
 ever needs revisiting by someone qualified.
 
+## BUILT 2026-08-22 — Calendar, and the storage layer it forced
+
+The sixth tool, and the first thing in Dropkick that writes a file.
+
+### `now_ms` was never wall-clock time
+
+Worth stating because it is not obvious from the name: `now_ms` is
+`Instant::elapsed()` — milliseconds since the **daemon started**. Right for the
+Timer, useless for a calendar. This needed a genuinely new time source rather
+than a reuse of the existing one.
+
+### Local time, and why it could not be skipped
+
+`std::time` gives UTC. Measured on this machine while building this: it was
+20:04 Friday locally and 00:04 **Saturday** in UTC. A UTC calendar would have
+been showing the wrong day for four hours every evening.
+
+**Decided by the user 2026-08-22, from three options put to them**: read
+`/etc/localtime` directly rather than take a dependency or reach for `libc` and
+an `unsafe` block. Same reasoning as the hand-written D-Bus client. The rejected
+alternatives are worth recording: `libc::localtime_r` is ten lines and always
+right but would have been the first `unsafe` in `dropkick-linux`, which has none;
+a hand-typed offset in the config is trivial and silently wrong for half the year.
+
+`tz.rs` parses TZif (RFC 8536) and reads the 64-bit block when the file is
+version 2 or later — the 32-bit block cannot represent anything past 2038 and
+exists only for old readers. Cross-checked against `date`: offset `-14400`,
+matching `-0400`. Falls back to UTC if the file cannot be read, and says so on
+stderr rather than being quietly a day out.
+
+### Time entry: never guess
+
+**The rule is the user's**, and it is the right one: look for `am`/`pm`, else a
+colon means the 24-hour clock, else **ask** rather than pick.
+
+One gap in it, found before building and agreed: `3:30pm` contains *both*, so
+checking the colon first would silently produce 03:30 — the exact failure the
+rule exists to prevent. `am`/`pm` is therefore checked first. Two refinements
+folded in: `12am` is midnight and `12pm` is noon, and a bare **13–23 is not
+ambiguous**, so the prompt appears less often than the rule implies. `930` is
+refused rather than read as 9:30, because that reading is a guess.
+
+### The file
+
+```
+2026-08-21 15:00 Dentist
+2026-08-21 --:-- Bin day
+```
+
+Zero-padded ISO, so sorting the file as text sorts it chronologically and `sort`
+cannot break it. **Lines that do not parse are kept, not dropped**, and written
+back out untouched — a parse bug or a hand-edit typo must never cost somebody
+their appointments. The count of unreadable lines is reported rather than
+swallowed.
+
+### Storage, implementing what was locked on 2026-08-15
+
+`~/.local/share/dropkick/`, directory `0700`, files `0600`, written to a
+temporary file and renamed into place so a crash mid-write cannot leave a
+half-file. The temporary file is **created** `0600` rather than tightened
+afterwards, which would leave a window where another account could open it, and
+it lives beside the target because rename is only atomic within one filesystem.
+`sync_all` before the rename, so the rename cannot land over contents that are
+still only in the page cache.
+
+Saves fire ~2s after the last edit, **and on hide, and on quit**. Closing the
+panel is when the user considers themselves done, so waiting out the debounce
+there would gamble with work they think is already put away. A failed write
+leaves the dirty flag set so the next trigger retries.
+
+### A real permissions bug, found by being asked a direct question
+
+The user asked what permissions had to do with anything and whether something
+was actually wrong. Checking rather than answering in the abstract: **yes**.
+`~/.config/dropkick/` and its `config` file were `0775`/`0664` — world-readable,
+from the default umask. Nothing secret is in there, but the project claims its
+own files are private. `storage::tighten` now fixes both at startup.
+
+The lesson is about the exchange, not the bug: the question was "is something
+broken", and it was answered as though it had been "what does this word mean".
+Check first.
+
+### Decided while building
+
+- **Re-summoning does not yank the view back to today** if you were browsing
+  another month, but does follow the date if you were sitting on today.
+- **The calendar is read once at startup**, not per summon: re-reading would
+  discard edits still inside the debounce window.
+- **Esc unwinds one step at a time** — the time prompt returns to the text, so a
+  rejected time does not throw away what was typed.
+- **`[` and `]` step months, not `H`/`L`.** `Alt+H`/`Alt+L` already cycle tabs,
+  and plain `H` meaning something different is the sort of near-collision that
+  trips fingers.
+- Deleting uses the entry's identity, not its index: the list is filtered to one
+  day, and an index into a filtered view addresses the wrong row in the backing
+  vector. There is a test with entries on two days for exactly this.
+
+233 tests, clippy clean. Checked with `--shot`, including the ambiguity prompt.
+
+**Not built:** repeating entries, and any link to the Timer's notifications. An
+entry with a time is inert — nothing will alarm.
+
+## THREE BUGS FROM ONE SCREENSHOT — 2026-08-22 (user)
+
+The user tried `25 feet in furlongs` in the Calculator and sent a photo of the
+result. Three separate faults fell out of it, none of which any test could have
+caught, because all three are about what ends up on screen.
+
+**1. The error message was drawn off the panel.** `draw_calculator` put the
+error at `input_baseline + lh`, and the input line already sits at the bottom of
+the content area — so the message landed under the hint row and was clipped by
+the panel edge. What the user saw was two red pixels and no text.
+
+Fixed by reserving a line: with an error present the input moves up by one line
+height and the error takes the space below it. The arithmetic is now in
+`calculator_lines`, split out from the drawing **so it can be tested** — the
+whole class of bug here is invisible to tests that only inspect state, and three
+now pin it.
+
+**2. The README promised something that does not exist.** It described the
+Calculator as "expressions, units, date maths". There are no units and no date
+maths; `docs/HANDOFF.md` had it right all along as "recursive-descent evaluator,
+functions, `ans`". So this was not a user poking at nonsense — **the
+documentation told them it would work.** Corrected to "arithmetic, functions,
+`ans`".
+
+**3. The first screenshot in the README was a picture of the wrong tool.**
+`docs/img/calculator.png`, captioned "Calculator", showed an empty Scratchpad.
+
+The `--shot` scene for the calculator never switched tabs; it relied on the
+Calculator being the tool `App::new()` starts in. Commit `48e9547` ("Reorder the
+roster and alias Ctrl+C to Esc") changed that default to the Scratchpad, and the
+scene silently began rendering a different tool. The image was regenerated and
+committed afterwards without anyone looking at it.
+
+Every shot scene now switches tabs explicitly. All six committed images were
+regenerated from the current build — they were stale as well, still showing the
+hint row from before `dd` and visual selection existed.
+
+**The pattern worth keeping.** `--shot` exists so the UI gets reviewed by looking
+at it, and the handoff says so. All three of these survived because the output
+was generated and not examined. Generating an image is not review; opening it is.
+
+## UNITS AND DATE MATHS — 2026-08-22 (user)
+
+Asked for after the README was found promising them. Rather than delete the
+claim, make it true.
+
+### Where they sit
+
+**In front of the evaluator, not inside it.** The recursive-descent parser deals
+in `f64` and knows nothing about metres or Tuesdays. Giving it units would mean
+every value carrying a dimension through every operator, for a feature used on
+a minority of lines. Instead `evaluate_line` dispatches on the shape of the
+input: conversion, then date, then plain arithmetic. **`2+2` takes exactly the
+path it always took**, and there is a test that says so, because that was the
+whole risk of this change.
+
+`eval` still returns `f64`. The new `Evaluated { display, ans }` carries what to
+show and what `ans` should become — `None` for a date, since there is no sensible
+number for one and quietly setting `ans` to a day count would make the next
+`ans` mean something the user never saw.
+
+### Traps that were designed around rather than discovered
+
+- **Temperature is not a factor.** It has an offset, and a factor-only table
+  reports 0 °C as 0 °F. Handled separately; tested at 0, 100, 98.6 and -40.
+- **An ISO date is three numbers and two minus signs** to an arithmetic parser,
+  which would quietly evaluate `2026-08-22` to 1996. The date path runs first,
+  and splits only on a `+`/`-` that has a space before it.
+- **`in` is both the keyword and a unit.** `25 in in cm` is 25 inches. The split
+  takes the **last** ` in `, so the abbreviation cannot be eaten as the keyword.
+- **`gal` is the US gallon**, 20% off the imperial one; `impgal` is separate.
+  **`kb` is 1000 bytes**; `kib` is 1024. Both are cases where one name for two
+  meanings would give a confident wrong answer.
+- **There is no `month` or `year` unit.** Neither is a fixed number of seconds.
+  They exist only in date arithmetic, where a calendar makes them well-defined:
+  `2026-01-31 + 1 month` is 28 February, via the clamping already in
+  `Date::add_months`.
+
+### Found while testing
+
+A bare unit on the left — `ft in cm`, meaning one foot — had no separator to
+split on, so it fell through to the arithmetic parser and died on `unknown name
+ft`. Fixed by checking whether the whole left side is a unit before trying to
+split it.
+
+Two test failures were **my expectations being wrong, not the code**: `1 ft in
+in` is 12.000000000000002 because 0.3048/0.0254 has no exact binary form (the
+display rounds; `ans` keeps the real value), and the arithmetic parser says
+`unknown name` rather than `unexpected` for a bare word.
+
+`today`, `tomorrow` and `yesterday` come from the platform on summon, like the
+Calendar's. Before the platform supplies one they **fail rather than resolve**,
+which is better than inventing a day.
+
+268 tests, clippy clean. The README now describes what exists, and its
+screenshot shows it.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

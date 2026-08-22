@@ -16,13 +16,16 @@
 
 pub mod app;
 pub mod calculator;
+pub mod calendar;
 pub mod clipboard;
 pub mod config;
+pub mod date;
 pub mod generate;
 pub mod key;
 pub mod scratchpad;
 pub mod text;
 pub mod timer;
+pub mod units;
 
 pub use app::{App, Request, Response, ToolId, TOOLS};
 pub use config::Config;
