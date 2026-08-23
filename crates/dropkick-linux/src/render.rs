@@ -24,7 +24,35 @@ const PAD: f32 = 18.0;
 const BG: u32 = 0x14_171C;
 const TAB_BG: u32 = 0x0E_1115;
 const TAB_ACTIVE: u32 = 0x1E_242E;
+/// The Scratchpad's accent, and the colour the panel wore before the rest of
+/// the tools had their own. Kept as the fallback.
 const ACCENT: u32 = 0x6F_B3F2;
+
+/// One accent per tool, so which tool you are in is readable from the corner of
+/// your eye rather than by reading the tab bar.
+///
+/// Chosen with three constraints, not for prettiness:
+///
+/// * **Well clear of `ERR`** (`0xE06C75`, a salmon red). An accent that could be
+///   mistaken for an error message would undo the point of having an error
+///   colour. Nothing here is redder than 320 degrees of hue.
+/// * **Light enough to read as text on `BG`**, and light enough that `BG` reads
+///   as text on *it* -- the Scratchpad's block cursor fills with the accent and
+///   draws the character in the background colour.
+/// * **Separated in hue**, not just in name. Two tools a few degrees apart are
+///   two tools you cannot tell apart in peripheral vision, which is the only
+///   thing this is for.
+fn accent(id: ToolId) -> u32 {
+    match id {
+        ToolId::Scratchpad => ACCENT,      // blue
+        ToolId::Clipboard => 0xB4_8EF2,    // violet
+        ToolId::Calculator => 0x7F_D69B,   // green
+        ToolId::Calendar => 0xE8_B36F,     // amber
+        ToolId::Timer => 0x5F_D3D6,        // cyan
+        ToolId::Generate => 0xB8_D96F,     // lime
+        ToolId::Color => 0xE8_8FD0,        // orchid
+    }
+}
 const FG: u32 = 0xD8_DEE9;
 const DIM: u32 = 0x69_727F;
 const FAINT: u32 = 0x3A_4250;
@@ -191,7 +219,7 @@ fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
         if active {
             canvas.fill_rect((x - 9.0) as i32, 4, (w + 18.0) as i32, TAB_H - 4, TAB_ACTIVE);
             // Accent underline: which tab owns the keyboard right now.
-            canvas.fill_rect((x - 9.0) as i32, TAB_H - 3, (w + 18.0) as i32, 3, ACCENT);
+            canvas.fill_rect((x - 9.0) as i32, TAB_H - 3, (w + 18.0) as i32, 3, accent(tool.id));
         }
 
         // A running timer is visible from any tab: the point of a countdown is
@@ -201,7 +229,7 @@ fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
         let key_color = if !tool.built {
             FAINT
         } else if active {
-            ACCENT
+            accent(tool.id)
         } else {
             DIM
         };
@@ -210,7 +238,7 @@ fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
         } else if active {
             FG
         } else if live {
-            ACCENT
+            accent(tool.id)
         } else {
             DIM
         };
@@ -259,7 +287,7 @@ fn draw_calculator(
     );
 
     let prompt = "> ";
-    let pen = text.draw(canvas, PAD, input_baseline, prompt, ACCENT);
+    let pen = text.draw(canvas, PAD, input_baseline, prompt, accent(app.active));
     let pen = text.draw(canvas, pen, input_baseline, &app.calculator.input, FG);
     // Caret: a thin bar, because the calculator is always in text entry.
     canvas.fill_rect(
@@ -267,7 +295,7 @@ fn draw_calculator(
         (input_baseline - text.line_height() * 0.72) as i32,
         2,
         (text.line_height() * 0.85) as i32,
-        ACCENT,
+        accent(app.active),
     );
 
     if let (Some(err), Some(y)) = (&app.calculator.error, err_baseline) {
@@ -344,7 +372,7 @@ fn draw_scratchpad(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top:
             } else {
                 (adv as i32, y - lh * 0.72, lh * 0.85)
             };
-            canvas.fill_rect(cx_px as i32, top_y as i32, w, h as i32, ACCENT);
+            canvas.fill_rect(cx_px as i32, top_y as i32, w, h as i32, accent(app.active));
         }
 
         let mut pen = PAD;
@@ -384,9 +412,9 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
     }
 
     if clip.mode == ClipMode::Search {
-        let pen = text.draw(canvas, PAD, y, "/", ACCENT);
+        let pen = text.draw(canvas, PAD, y, "/", accent(app.active));
         let pen = text.draw(canvas, pen, y, &clip.query, FG);
-        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, accent(app.active));
         y += lh * 1.4;
     }
 
@@ -433,7 +461,7 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
         }
 
         let marker = if entry.pinned { "*" } else { " " };
-        text.draw(canvas, PAD, y, marker, if entry.pinned { ACCENT } else { FAINT });
+        text.draw(canvas, PAD, y, marker, if entry.pinned { accent(app.active) } else { FAINT });
 
         let body = if clip.revealed {
             entry.preview(cols)
@@ -521,7 +549,7 @@ fn draw_color(
 
     if c.picking {
         let msg = "click anywhere on screen to pick a colour";
-        text.draw(canvas, PAD, top as f32 + lh * 3.0, msg, ACCENT);
+        text.draw(canvas, PAD, top as f32 + lh * 3.0, msg, accent(app.active));
     }
 
     canvas.fill_rect(
@@ -531,14 +559,14 @@ fn draw_color(
         1,
         RULE,
     );
-    let pen = text.draw(canvas, PAD, input_baseline, "> ", ACCENT);
+    let pen = text.draw(canvas, PAD, input_baseline, "> ", accent(app.active));
     let pen = text.draw(canvas, pen, input_baseline, &c.input, FG);
-    canvas.fill_rect(pen as i32 + 1, (input_baseline - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+    canvas.fill_rect(pen as i32 + 1, (input_baseline - lh * 0.72) as i32, 2, (lh * 0.85) as i32, accent(app.active));
 
     if let Some(p) = c.problem {
         text.draw(canvas, PAD, input_baseline - lh * 1.8, p, ERR);
     } else if let Some(n) = &c.notice {
-        text.draw(canvas, PAD, input_baseline - lh * 1.8, n, ACCENT);
+        text.draw(canvas, PAD, input_baseline - lh * 1.8, n, accent(app.active));
     }
 }
 
@@ -600,13 +628,13 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
                 (row_y - lh * 0.78) as i32,
                 (adv * 2.9) as i32,
                 (lh * 0.95) as i32,
-                if c.mode == Mode::Grid { ACCENT } else { SELECT },
+                if c.mode == Mode::Grid { accent(app.active) } else { SELECT },
             );
         }
         let colour = if focused && c.mode == Mode::Grid {
             BG
         } else if date == c.today {
-            ACCENT
+            accent(app.active)
         } else {
             FG
         };
@@ -627,7 +655,7 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
         MONTH_NAMES[(c.focus.month - 1) as usize]
     );
     let mut ly = top as f32 + lh * 1.6;
-    text.draw(canvas, list_x, ly, &heading, if c.focus == c.today { ACCENT } else { FG });
+    text.draw(canvas, list_x, ly, &heading, if c.focus == c.today { accent(app.active) } else { FG });
     ly += lh * 1.8;
 
     let entries = c.on(c.focus);
@@ -648,7 +676,7 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
         }
         // All-day entries line up under the times rather than jutting left.
         let when = e.time.map_or_else(|| "  -  ".to_string(), format_time);
-        text.draw(canvas, list_x, ly, &when, if e.time.is_some() { ACCENT } else { FAINT });
+        text.draw(canvas, list_x, ly, &when, if e.time.is_some() { accent(app.active) } else { FAINT });
         text.draw(canvas, list_x + adv * 6.5, ly, &e.text, FG);
         ly += lh * 1.2;
     }
@@ -659,7 +687,7 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
         Mode::Text => {
             let line = format!("what: {}", c.draft_text);
             let pen = text.draw(canvas, list_x, ly, &line, FG);
-            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, accent(app.active));
             ly += lh * 1.3;
             text.draw(canvas, list_x, ly, "enter for the time, esc to cancel", FAINT);
         }
@@ -668,7 +696,7 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
             ly += lh * 1.3;
             let line = format!("when: {}", c.draft_time);
             let pen = text.draw(canvas, list_x, ly, &line, FG);
-            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+            canvas.fill_rect(pen as i32 + 1, (ly - lh * 0.72) as i32, 2, (lh * 0.85) as i32, accent(app.active));
             ly += lh * 1.3;
             match c.problem {
                 Some(msg) => text.draw(canvas, list_x, ly, msg, ERR),
@@ -685,7 +713,7 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
             let am = if h == 12 { 0 } else { h };
             let pm = if h == 12 { 12 } else { h + 12 };
             let opts = format!("a  {}        p  {}", format_time(am * 60), format_time(pm * 60));
-            text.draw(canvas, list_x, ly, &opts, ACCENT);
+            text.draw(canvas, list_x, ly, &opts, accent(app.active));
         }
         _ => {}
     }
@@ -768,7 +796,7 @@ fn draw_generate(
         "nothing here is stored, or kept after you close the panel"
     };
     let px = (canvas.w as f32 - text.width_of(promise)) / 2.0;
-    text.draw(canvas, px, y, promise, if g.copied { ACCENT } else { FAINT });
+    text.draw(canvas, px, y, promise, if g.copied { accent(app.active) } else { FAINT });
 }
 
 fn draw_timer(
@@ -787,7 +815,7 @@ fn draw_timer(
     let readout = format_duration(t.display_ms(now_ms));
     let x = (canvas.w as f32 - big.width_of(&readout)) / 2.0;
     let color = if t.finished {
-        ACCENT
+        accent(app.active)
     } else if t.is_running() {
         FG
     } else {
@@ -810,7 +838,7 @@ fn draw_timer(
         let entry = format!("> {}", t.input);
         let ex = (canvas.w as f32 - text.width_of(&entry)) / 2.0;
         let pen = text.draw(canvas, ex, y, &entry, FG);
-        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+        canvas.fill_rect(pen as i32 + 1, (y - lh * 0.72) as i32, 2, (lh * 0.85) as i32, accent(app.active));
         y += lh;
     }
     if let Some(err) = &t.error {
@@ -827,7 +855,7 @@ fn draw_hints(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
 
     match &app.notice {
         Some(notice) => {
-            text.draw(canvas, PAD, baseline, notice, ACCENT);
+            text.draw(canvas, PAD, baseline, notice, accent(app.active));
         }
         None => {
             text.draw(canvas, PAD, baseline, app.hints(), DIM);
@@ -857,6 +885,93 @@ mod tests {
             apply_opacity(&mut canvas, opacity);
         }
         (buf, w, h)
+    }
+
+    /// Perceived brightness, the same WCAG relative luminance the Color tool
+    /// uses. Duplicated rather than imported so this test does not depend on a
+    /// tool's implementation to check the chrome.
+    fn luminance(c: u32) -> f64 {
+        let f = |v: u32| {
+            let x = v as f64 / 255.0;
+            if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) }
+        };
+        0.2126 * f((c >> 16) & 0xFF) + 0.7152 * f((c >> 8) & 0xFF) + 0.0722 * f(c & 0xFF)
+    }
+
+    fn contrast(a: u32, b: u32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        let (hi, lo) = if x > y { (x, y) } else { (y, x) };
+        (hi + 0.05) / (lo + 0.05)
+    }
+
+    fn hue(c: u32) -> f64 {
+        let (r, g, b) =
+            (((c >> 16) & 0xFF) as f64, ((c >> 8) & 0xFF) as f64, (c & 0xFF) as f64);
+        let (max, min) = (r.max(g).max(b), r.min(g).min(b));
+        let d = max - min;
+        if d == 0.0 {
+            return 0.0;
+        }
+        let h = if max == r {
+            60.0 * (((g - b) / d) % 6.0)
+        } else if max == g {
+            60.0 * ((b - r) / d + 2.0)
+        } else {
+            60.0 * ((r - g) / d + 4.0)
+        };
+        (h + 360.0) % 360.0
+    }
+
+    const ALL_TOOLS: [ToolId; 7] = [
+        ToolId::Scratchpad,
+        ToolId::Clipboard,
+        ToolId::Calculator,
+        ToolId::Calendar,
+        ToolId::Timer,
+        ToolId::Generate,
+        ToolId::Color,
+    ];
+
+    #[test]
+    fn every_tool_has_its_own_accent() {
+        let mut seen: Vec<u32> = Vec::new();
+        for id in ALL_TOOLS {
+            let a = accent(id);
+            assert!(!seen.contains(&a), "{id:?} reuses an accent");
+            seen.push(a);
+        }
+    }
+
+    #[test]
+    fn accents_are_readable_both_ways_round() {
+        // As text on the panel, and as a block cursor with BG text on top of it.
+        for id in ALL_TOOLS {
+            let c = contrast(accent(id), BG);
+            assert!(c >= 4.5, "{id:?} is only {c:.1}:1 against the background");
+        }
+    }
+
+    #[test]
+    fn no_accent_can_be_mistaken_for_an_error() {
+        // ERR is a salmon red. An accent sitting next to it in hue would make
+        // "something went wrong" and "you are in this tool" look alike.
+        for id in ALL_TOOLS {
+            let d = (hue(accent(id)) - hue(ERR)).abs().min(360.0 - (hue(accent(id)) - hue(ERR)).abs());
+            assert!(d > 30.0, "{id:?} is {d:.0} degrees from the error colour");
+        }
+    }
+
+    #[test]
+    fn accents_are_separated_enough_to_tell_apart() {
+        // Peripheral vision is the whole point; two tools a few degrees apart
+        // are two tools that look the same when you are not looking at them.
+        for (i, a) in ALL_TOOLS.iter().enumerate() {
+            for b in ALL_TOOLS.iter().skip(i + 1) {
+                let raw = (hue(accent(*a)) - hue(accent(*b))).abs();
+                let d = raw.min(360.0 - raw);
+                assert!(d > 25.0, "{a:?} and {b:?} are only {d:.0} degrees apart");
+            }
+        }
     }
 
     #[test]

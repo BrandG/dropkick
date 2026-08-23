@@ -1635,6 +1635,36 @@ window beneath. `set_input_region` limited to the panel rectangle fixes that,
 and is worth doing whenever the shadow happens. Anchored `TOP`, the shadow above
 the panel is against the screen edge and mostly wasted.
 
+## AN ACCENT PER TOOL — 2026-08-23 (user)
+
+Seven tools, seven accents. The point is peripheral: which tool the panel is in
+should be readable without reading the tab bar. The active tab's underline and
+key letter carry it, and so does everything inside — the cursor, the focused
+day, a running timer's readout, the "copied" notice.
+
+The palette lives in `render.rs`, not in core. Core has never known a colour and
+should not start; `Tool` carries a key and a name, and that is the whole of what
+it should know about being displayed.
+
+Chosen against constraints rather than for prettiness, each of which is a test:
+
+- **Distinct**, obviously.
+- **Clear of `ERR`** by more than 30 degrees of hue. An accent that reads as the
+  error colour undoes the point of having one, so nothing is redder than orchid.
+- **At least 4.5:1 against `BG`**, which is needed in both directions: accents
+  are drawn as text on the panel *and* filled behind background-coloured text,
+  because that is how the Scratchpad's block cursor works.
+- **More than 25 degrees apart from each other.** Two tools a few degrees apart
+  are two tools that look identical when you are not looking at them, which is
+  the only situation this feature exists for.
+
+Inactive tabs stay `DIM`. Seven colours across the bar at once was the obvious
+thing to try and it is noise: the signal is *which one is lit*, and colouring
+the unlit ones competes with it.
+
+The committed screenshots were regenerated, since every one of them shows a tab
+bar.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
