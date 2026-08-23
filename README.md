@@ -133,6 +133,8 @@ timer.notify = true      # notify when a countdown finishes
 timer.sound = true       # ask the server to play a sound with it
 timer.show_panel = false # also bring the panel up (off: it covers the screen)
 
+panel.opacity = 100      # 100 is solid; lower to see through it
+
 generate.length = 20     # default password length
 generate.lower = true    # a-z
 generate.upper = true    # A-Z

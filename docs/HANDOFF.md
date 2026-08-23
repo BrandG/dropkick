@@ -58,6 +58,14 @@ Renders every view to PPM by driving the real `App` through synthetic keys.
 Convert with `pnmtopng` and look at them. This is how the UI gets reviewed —
 use it rather than describing a screenshot in prose.
 
+**PPM has no alpha**, so `--shot` cannot show the rounded corners or
+`panel.opacity`; a transparent pixel is premultiplied to black and looks like a
+black pixel. For those, composite over a checkerboard instead:
+
+```
+cargo run --release --example preview -- 200 /tmp/dk.ppm
+```
+
 Other dev-only flags and env vars:
 
 ```

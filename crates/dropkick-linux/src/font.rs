@@ -104,6 +104,39 @@ impl Canvas<'_> {
         }
     }
 
+    /// Read a pixel back as `0xRRGGBB`, dropping alpha.
+    #[inline]
+    pub fn get(&self, x: i32, y: i32) -> u32 {
+        if x < 0 || y < 0 || x >= self.w || y >= self.h {
+            return 0;
+        }
+        let i = ((y * self.w + x) * 4) as usize;
+        u32::from_le_bytes([self.buf[i], self.buf[i + 1], self.buf[i + 2], self.buf[i + 3]])
+            & 0x00FF_FFFF
+    }
+
+    /// Write a pixel with a chosen alpha.
+    ///
+    /// **Wayland's `ARGB8888` is premultiplied**, so the colour components are
+    /// scaled by the alpha here rather than being passed through. Writing
+    /// straight (unpremultiplied) values produces a picture that is visibly too
+    /// bright wherever it is translucent, which is the sort of thing that gets
+    /// blamed on the compositor.
+    #[inline]
+    pub fn put_alpha(&mut self, x: i32, y: i32, color: u32, alpha: u8) {
+        if x < 0 || y < 0 || x >= self.w || y >= self.h {
+            return;
+        }
+        let a = alpha as u32;
+        let scale = |c: u32| ((c * a + 127) / 255) & 0xFF;
+        let out = (a << 24)
+            | (scale((color >> 16) & 0xFF) << 16)
+            | (scale((color >> 8) & 0xFF) << 8)
+            | scale(color & 0xFF);
+        let i = ((y * self.w + x) * 4) as usize;
+        self.buf[i..i + 4].copy_from_slice(&out.to_le_bytes());
+    }
+
     #[inline]
     fn set(&mut self, x: i32, y: i32, color: u32) {
         if x < 0 || y < 0 || x >= self.w || y >= self.h {

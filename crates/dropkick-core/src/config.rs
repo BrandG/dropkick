@@ -36,6 +36,14 @@ pub struct Config {
     pub generate_symbols: bool,
     /// Leave out characters that are easy to misread: l I 1 O 0.
     pub generate_exclude_ambiguous: bool,
+
+    /// How see-through the panel is, as a percentage. 100 is solid.
+    ///
+    /// Floored at 20 rather than 0: a panel you cannot see is one you cannot
+    /// find your way out of, and the setting would look like a crash. Values
+    /// outside the range are clamped rather than rejected, because unlike a
+    /// misspelled key this one still says clearly what was meant.
+    pub panel_opacity: u32,
 }
 
 impl Default for Config {
@@ -50,6 +58,7 @@ impl Default for Config {
             generate_digits: true,
             generate_symbols: true,
             generate_exclude_ambiguous: false,
+            panel_opacity: 100,
         }
     }
 }
@@ -100,6 +109,10 @@ impl Config {
                 "generate.digits" => config.generate_digits = on,
                 "generate.symbols" => config.generate_symbols = on,
                 "generate.exclude_ambiguous" => config.generate_exclude_ambiguous = on,
+                "panel.opacity" => match value.parse::<u32>() {
+                    Ok(n) => config.panel_opacity = n.clamp(20, 100),
+                    Err(_) => unknown.push(Unknown { line: i + 1, key: key.to_string() }),
+                },
                 _ => unknown.push(Unknown { line: i + 1, key: key.to_string() }),
             }
         }
@@ -136,6 +149,11 @@ generate.symbols = true
 # Leave out characters that are easy to misread when typing a password
 # somewhere else by hand: l I 1 O 0.
 generate.exclude_ambiguous = false
+
+# How see-through the panel is, as a percentage. 100 is solid. Lower lets you
+# read what is behind it -- handy when you are copying something off the window
+# underneath. Values below 20 are treated as 20, so it cannot become invisible.
+panel.opacity = 100
 "
     }
 }

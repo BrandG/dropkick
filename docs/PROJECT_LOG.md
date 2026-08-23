@@ -1557,6 +1557,64 @@ opaque region is declared, so the compositor would honour transparent corner
 pixels. `Canvas::set` forces alpha to `0xFF`, so it would need a way to write a
 transparent pixel first.
 
+## ROUNDED CORNERS AND A TRANSPARENCY SETTING — 2026-08-23 (user)
+
+The user asked what transparency costs before agreeing to it, which was the
+right question and had a better answer than expected: **nothing, because it is
+already being paid for.**
+
+- **Memory: none.** The buffer is already `Argb8888`. The alpha byte exists for
+  all 432,400 pixels and was being hardcoded to `0xFF`. 1.65 MiB, already spent.
+- **Paint: none.** `Canvas::set` already writes four bytes per pixel.
+- **Compositing:** this is the one that could cost, since a translucent surface
+  cannot be occlusion-culled. But **Dropkick has never declared an opaque
+  region** — there is no `set_opaque_region` call anywhere — so cosmic-comp
+  already assumes the whole surface may be translucent and blends it every
+  frame. The cost was being incurred and nothing was being got for it.
+
+Declaring the interior opaque and leaving only the corners transparent would be
+*faster* than what was running before. **Deliberately not done** (user): an
+opacity setting is worth more here than the optimisation, and the two conflict.
+
+### panel.opacity
+
+Whole-panel, 20–100, defaulting to 100. Floored at 20 rather than 0 because a
+panel you cannot see is one you cannot find your way out of, and it would look
+like a crash rather than a setting.
+
+**Premultiplied alpha is the trap.** Wayland's `ARGB8888` expects the colour
+channels scaled by the alpha. Writing straight values gives a picture that is
+visibly too bright wherever it is see-through, and it reads as a compositor bug
+rather than ours. `Canvas::put_alpha` does the multiply, and a test asserts the
+channels come out scaled.
+
+### Corners
+
+Radius 10, antialiased by coverage — at that size a hard edge is a visible
+staircase. Cut *after* everything opaque is painted, because the tab bar and
+hint row both run to the panel edge and would square them off again; opacity is
+applied last so it scales what is actually on screen.
+
+**A test caught an off-by-one that eyeballing had missed.** The corner loops ran
+`0..r`, which stops one pixel short of the arc centre's inset and left the
+actual corner pixels untouched — a rounded arc drawn inside a square corner. The
+composite I had made looked plausible because PPM has no alpha, so the cut-away
+region was showing as black rather than as background.
+
+Which is the lesson worth keeping: **`--shot` can no longer review this part of
+the UI.** PPM cannot represent transparency. `cargo run --example preview`
+composites over a checkerboard and is the way to look at corners and opacity.
+
+### On the shadow, deferred
+
+Not screen real estate: the panel is 37% x 29% of this 2560x1600 display, and a
+32px margin takes it to 39% x 33%. The real cost is that **no input region is
+declared either**, so the whole surface swallows pointer events — growing it for
+a shadow would grow a dead band where clicks land on Dropkick instead of the
+window beneath. `set_input_region` limited to the panel rectangle fixes that,
+and is worth doing whenever the shadow happens. Anchored `TOP`, the shadow above
+the panel is against the screen edge and mostly wasted.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

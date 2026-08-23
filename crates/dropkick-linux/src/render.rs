@@ -39,16 +39,21 @@ const SELECT: u32 = 0x2E_3A4B;
 // with no seam look like one window.
 const BORDER: u32 = 0x5A_6B82;
 const BORDER_W: i32 = 1;
+/// Corner radius. Small on purpose: this is a utility panel, not a phone card.
+const RADIUS: i32 = 10;
 
 /// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
 /// clock that can be stale, and the timer readout is the one thing here that
 /// must never be.
+/// `opacity` is 0..=255 and applies to the whole panel, background and text
+/// alike, which is what "make the window see-through" means everywhere else.
 pub fn draw(
     app: &App,
     text: &mut TextRenderer,
     big: &mut TextRenderer,
     now_ms: u64,
     canvas: &mut Canvas,
+    opacity: u8,
 ) {
     canvas.fill(BG);
     draw_tabs(app, text, canvas);
@@ -68,6 +73,79 @@ pub fn draw(
 
     draw_hints(app, text, canvas);
     draw_border(canvas);
+    // Order matters. The corners have to be cut after everything opaque is
+    // painted, or the tab bar and hint row -- which both run to the very edge
+    // -- would square them off again. Opacity comes last so it scales what is
+    // actually on screen, corners included.
+    round_corners(canvas);
+    apply_opacity(canvas, opacity);
+}
+
+/// Cut the four corners to a radius, carrying the border around the arc.
+///
+/// Antialiased by coverage rather than stepped: at this radius a hard edge
+/// reads as a staircase, and the whole point is that the panel look deliberate.
+fn round_corners(canvas: &mut Canvas) {
+    let (w, h, r) = (canvas.w, canvas.h, RADIUS);
+    if r <= 0 {
+        return;
+    }
+    // Arc centres, one per corner, each inset by the radius.
+    let corners = [(r, r, -1, -1), (w - 1 - r, r, 1, -1), (r, h - 1 - r, -1, 1), (w - 1 - r, h - 1 - r, 1, 1)];
+
+    for (cx, cy, sx, sy) in corners {
+        // Inclusive of r: the arc centre is inset by exactly the radius, so
+        // `0..r` stops one pixel short and leaves the actual corner square.
+        for i in 0..=r {
+            for j in 0..=r {
+                let x = cx + sx * i;
+                let y = cy + sy * j;
+                let (dx, dy) = ((x - cx) as f32, (y - cy) as f32);
+                let d = (dx * dx + dy * dy).sqrt();
+                let rf = r as f32;
+
+                // Coverage: 1 well inside the arc, 0 well outside, a soft ramp
+                // across the single pixel that straddles it.
+                let coverage = (rf + 0.5 - d).clamp(0.0, 1.0);
+                if coverage >= 1.0 && d <= rf - BORDER_W as f32 {
+                    continue; // Untouched interior.
+                }
+                let colour = if d > rf - BORDER_W as f32 - 0.5 {
+                    BORDER
+                } else {
+                    canvas.get(x, y)
+                };
+                canvas.put_alpha(x, y, colour, (coverage * 255.0).round() as u8);
+            }
+        }
+    }
+}
+
+/// Scale the whole panel's alpha.
+///
+/// A single pass over the buffer, which is cheaper than it sounds: the pixels
+/// were already being written once each, and this reads and writes them once
+/// more. Skipped entirely when opaque, which is the default.
+fn apply_opacity(canvas: &mut Canvas, opacity: u8) {
+    if opacity == 255 {
+        return;
+    }
+    let a = opacity as u32;
+    for chunk in canvas.buf.chunks_exact_mut(4) {
+        let px = u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]);
+        let existing = (px >> 24) & 0xFF;
+        if existing == 0 {
+            continue; // Already cut away by the corners.
+        }
+        // Everything here is premultiplied already, so scaling all four
+        // channels by the same factor keeps it consistent.
+        let scale = |c: u32| ((c * a + 127) / 255) & 0xFF;
+        let out = (scale(existing) << 24)
+            | (scale((px >> 16) & 0xFF) << 16)
+            | (scale((px >> 8) & 0xFF) << 8)
+            | scale(px & 0xFF);
+        chunk.copy_from_slice(&out.to_le_bytes());
+    }
 }
 
 /// A hairline around the whole panel, drawn last so nothing paints over it.
@@ -747,6 +825,82 @@ fn draw_hints(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn alpha_at(buf: &[u8], w: i32, x: i32, y: i32) -> u8 {
+        buf[((y * w + x) * 4 + 3) as usize]
+    }
+
+    /// Render a real panel into a buffer, so the corner and opacity passes are
+    /// checked against what actually reaches the compositor rather than against
+    /// a hand-made bitmap.
+    fn rendered(opacity: u8) -> (Vec<u8>, i32, i32) {
+        let (w, h) = (WIDTH as i32, HEIGHT as i32);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        {
+            let mut canvas = Canvas { buf: &mut buf, w, h };
+            canvas.fill(BG);
+            draw_border(&mut canvas);
+            round_corners(&mut canvas);
+            apply_opacity(&mut canvas, opacity);
+        }
+        (buf, w, h)
+    }
+
+    #[test]
+    fn the_corners_are_actually_cut_away() {
+        let (buf, w, h) = rendered(255);
+        // The extreme corner pixel of each side is outside the arc.
+        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(alpha_at(&buf, w, x, y), 0, "corner ({x},{y}) should be transparent");
+        }
+        // And the middle is not.
+        assert_eq!(alpha_at(&buf, w, w / 2, h / 2), 255);
+    }
+
+    #[test]
+    fn the_corner_edge_is_softened_rather_than_stepped() {
+        // Somewhere along each arc there must be a partially covered pixel, or
+        // the curve is a staircase.
+        let (buf, w, _h) = rendered(255);
+        let soft = (0..RADIUS)
+            .flat_map(|i| (0..RADIUS).map(move |j| (i, j)))
+            .filter(|(i, j)| {
+                let a = alpha_at(&buf, w, *i, *j);
+                a > 0 && a < 255
+            })
+            .count();
+        assert!(soft > 0, "no antialiased pixels on the arc");
+    }
+
+    #[test]
+    fn opacity_scales_the_whole_panel_and_leaves_the_cut_alone() {
+        let (buf, w, h) = rendered(128);
+        assert_eq!(alpha_at(&buf, w, w / 2, h / 2), 128, "interior should be half opaque");
+        assert_eq!(alpha_at(&buf, w, 0, 0), 0, "a cut corner cannot become visible");
+    }
+
+    #[test]
+    fn full_opacity_leaves_the_buffer_untouched() {
+        let (a, _, _) = rendered(255);
+        let (b, w, h) = rendered(255);
+        assert_eq!(a, b);
+        assert_eq!(alpha_at(&b, w, w / 2, h / 2), 255);
+    }
+
+    #[test]
+    fn translucent_pixels_stay_premultiplied() {
+        // Wayland expects premultiplied ARGB. If the colour is not scaled with
+        // the alpha, the panel is visibly too bright wherever it is see-through
+        // -- and it looks like a compositor bug rather than ours.
+        let (buf, w, h) = rendered(128);
+        let i = (((h / 2) * w + w / 2) * 4) as usize;
+        let (b, g, r, a) = (buf[i] as u32, buf[i + 1] as u32, buf[i + 2] as u32, buf[i + 3] as u32);
+        assert_eq!(a, 128);
+        for (chan, full) in [(r, (BG >> 16) & 0xFF), (g, (BG >> 8) & 0xFF), (b, BG & 0xFF)] {
+            let want = (full * a + 127) / 255;
+            assert_eq!(chan, want, "channel not premultiplied: {chan} vs {want}");
+        }
+    }
 
     /// The bug this pins: the error was drawn at `input + lh`, which is past
     /// the bottom of the content area, so it rendered under the hint row and

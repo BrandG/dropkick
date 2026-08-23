@@ -363,7 +363,8 @@ impl Dropkick {
 
         let mut canvas = Canvas { buf: pixels, w: width as i32, h: height as i32 };
         let now = self.started.elapsed().as_millis() as u64;
-        render::draw(&self.app, &mut self.text, &mut self.big, now, &mut canvas);
+        let opacity = (self.settings.config.panel_opacity.clamp(20, 100) * 255 / 100) as u8;
+        render::draw(&self.app, &mut self.text, &mut self.big, now, &mut canvas, opacity);
 
         let Some(layer) = self.layer.as_ref() else { return };
         layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
@@ -1422,7 +1423,9 @@ everywhere.";
         setup(&mut app);
         let mut buf = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
         let mut canvas = Canvas { buf: &mut buf, w: WIDTH as i32, h: HEIGHT as i32 };
-        render::draw(&app, &mut text, &mut big, SHOT_NOW_MS, &mut canvas);
+        // Shots are rendered solid: an opacity setting would make every frame
+        // depend on the machine's config file rather than on the code.
+        render::draw(&app, &mut text, &mut big, SHOT_NOW_MS, &mut canvas, 255);
         let path = format!("{prefix}-{name}.ppm");
         std::fs::write(&path, canvas.to_ppm())?;
         println!("wrote {path}");
