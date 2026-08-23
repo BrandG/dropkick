@@ -18,6 +18,7 @@ pub mod app;
 pub mod calculator;
 pub mod calendar;
 pub mod clipboard;
+pub mod color;
 pub mod config;
 pub mod date;
 pub mod generate;

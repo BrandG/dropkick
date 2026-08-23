@@ -1415,6 +1415,119 @@ which is better than inventing a day.
 268 tests, clippy clean. The README now describes what exists, and its
 screenshot shows it.
 
+## BUILT 2026-08-22 — Colour, and D-Bus signals at last
+
+The seventh tool. **All seven roster slots are now built**; three keys
+(`alt+i/o/p`) stay deliberately unspent.
+
+### The eyedropper needed the thing that had been missing all along
+
+`PickColor` was checked before anything was planned, because the last portal
+this project wanted — `GlobalShortcuts` — turned out not to exist on this
+machine. This one does: `org.freedesktop.portal.Screenshot`, version 2.
+
+It does not return a colour. It returns an object path for a pending Request,
+and the answer arrives later as a `Response` **signal** on that path. The
+hand-written D-Bus client had no signal support, which is precisely why the
+Color tool was last. Added:
+
+- `MSG_SIGNAL`, and the member name threaded out of the header parser so a
+  signal can be recognised at all.
+- The unique bus name, captured from the `Hello` reply and previously thrown
+  away. The portal builds the Request path out of it, and **the match rule has
+  to be installed before the call** — installing it afterwards is a race the
+  user loses by picking quickly.
+- A narrow decoder for `(u response, a{sv})`, finding the `color` key and the
+  three doubles after it. Deliberately not a general variant decoder: that is a
+  lot of surface for one message shape.
+
+**It runs on a thread.** `pick_color` blocks until the user clicks something,
+which might be never. Inline, that would freeze the panel with no way out — not
+even Esc, because the event loop would not be reading keys. The thread posts
+back over a `calloop::channel`, the same shape `ipc::spawn_listener` already
+uses, so no new machinery and still no async runtime. The panel hides itself
+first, since the portal is about to ask for a pixel that Dropkick is covering.
+
+Cancelling reports `Ok(None)` and is **not** an error: leaving `picking` set
+would strand the panel saying "pick a colour" forever. There is a test.
+
+### The tool
+
+Free text like the Calculator, so every printable key belongs to the input —
+which is why the eyedropper is **Tab** and copying is **Ctrl+Y**. `t` has to be
+able to type a `t`, and there is a test asserting exactly that.
+
+Accepts `#6FB3F2`, `#abc`, bare hex, `rgb(...)`, `hsl(...)`, and the CSS colour
+names. Shows hex, rgb, hsl and the name — or the nearest name, labelled as
+nearest, when it is not exact. Out-of-range input like `rgb(300, 0, 0)` is
+**refused rather than clamped**: clamping would turn a mistake into a confident
+red.
+
+No alpha. This answers "what is that colour in hex", and a channel that silently
+round-trips through HSL and back is a way to lose information.
+
+### Found by looking at it
+
+Two rendering faults, both invisible to the tests:
+
+1. **The hex label overflowed the swatch.** Seven characters at 58px are wider
+   than 220px, so it ran off the left edge of the panel. The swatch is now 300
+   wide and the label drops to the small font if it still will not fit.
+2. **White text on tomato.** The threshold for black-vs-white on the swatch was
+   a guessed 0.35. The real crossover is where the two WCAG contrasts are equal:
+   `sqrt(1.05 * 0.05) - 0.05`, about **0.179**. Tomato is 0.309, so black is
+   right — 7:1 rather than 3:1. Now derived in `prefers_dark_text`, with the
+   derivation written out and a test that checks the two contrasts agree at the
+   crossover.
+
+### And a decoder bug the tests caught
+
+The scan for the doubles used an exclusive upper bound, so it missed the last
+valid offset — which is the common case, since the doubles are the final thing
+in the body. Every real response would have failed to decode.
+
+298 tests, clippy clean.
+
+### MEASURED 2026-08-23: COSMIC's portal refuses PickColor
+
+It was verified, and it does not work — **for reasons outside Dropkick**. Traced
+on the bus, with `dbus-monitor` watching the whole exchange:
+
+```
+-> PickColor("", {handle_token: "dropkick_pick"})
+-> impl.portal.Screenshot.PickColor(/…/request/1_1581/dropkick_pick, …)
+<- Request.Response  uint32 2   (1.3 ms later, no UI shown)
+```
+
+Response code 2 is "ended for other reasons" — not a cancellation, which is 1.
+No picker appeared, and `xdg-desktop-portal-cosmic` logged nothing about it.
+Reproduced from `gdbus`, an entirely unrelated client, with the same result, so
+it is not something about how Dropkick asks.
+
+**What this proves about our side:** the plumbing is right. The portal built
+exactly the Request path the match rule predicted, the signal was received, and
+the 8-byte body decoded correctly into response code 2. Every part of the new
+signal support works; the desktop simply declines.
+
+The backend declares the method and carries a `PickColorResult` type with a
+`color` field, so it is wired up at the interface level and errors somewhere
+inside. Version `0.1.0pop1~1785249581~24.04~f211aa3`.
+
+**This is the GlobalShortcuts lesson again, one layer deeper.** That interface
+was absent and could be detected by introspection. This one is present,
+introspectable, version 2, with a backend that claims it — and still does not
+work. Introspection is not evidence of function; only calling it is.
+
+The code stays as written. It is correct, it is tested, and it will start
+working the day COSMIC implements the method, with no change here.
+
+**A native alternative exists if the eyedropper is wanted for real.** cosmic-comp
+exports `ext_image_copy_capture_manager_v1`, and Dropkick already speaks
+Wayland. Capturing the screen and reading the pixel under the cursor would need
+no D-Bus and no dependency — the same shape as hand-rolling the D-Bus client
+rather than taking one. It is real work: the capture protocol, a full-screen
+picker surface, and cursor handling. Not started.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

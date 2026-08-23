@@ -8,6 +8,7 @@
 use crate::calculator::Calculator;
 use crate::calendar::Calendar;
 use crate::clipboard::{Clipboard, Outcome};
+use crate::color::{ColorTool, Outcome as ColorOutcome};
 use crate::generate::{Generate, Outcome as GenOutcome};
 use crate::key::{Key, KeyPress};
 use crate::scratchpad::Scratchpad;
@@ -46,7 +47,7 @@ pub const TOOLS: [Tool; 7] = [
     Tool { id: ToolId::Calendar, name: "Calendar", key: 'r', built: true },
     Tool { id: ToolId::Timer, name: "Timer", key: 't', built: true },
     Tool { id: ToolId::Generate, name: "Generate", key: 'y', built: true },
-    Tool { id: ToolId::Color, name: "Color", key: 'u', built: false },
+    Tool { id: ToolId::Color, name: "Color", key: 'u', built: true },
 ];
 
 /// Work the core wants done that only the platform can do. Core never touches
@@ -68,6 +69,9 @@ pub enum Request {
     /// The calendar changed. The platform debounces this and writes the file;
     /// the core neither knows where it lives nor when the write happens.
     SaveCalendar,
+    /// Run the desktop portal's screen colour picker. The answer comes back
+    /// later, out of band, because the user has to click something first.
+    PickColor,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,6 +92,7 @@ pub struct App {
     pub timer: Timer,
     pub generate: Generate,
     pub calendar: Calendar,
+    pub color: ColorTool,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -105,6 +110,7 @@ impl Default for App {
             timer: Timer::new(),
             generate: Generate::new(),
             calendar: Calendar::new(),
+            color: ColorTool::new(),
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -159,6 +165,13 @@ impl App {
                     "hjkl move  [ ] month  t today  a add  tab entries  esc x"
                 }
             },
+            ToolId::Color => {
+                if self.color.picking {
+                    "pick a colour anywhere on screen   esc cancels"
+                } else {
+                    "type #6FB3F2 / rgb(...) / hsl(...) / a name   tab eyedropper   ctrl-y copy"
+                }
+            }
             ToolId::Timer => {
                 if self.timer.is_running() {
                     "space pause   r reset   esc x   (it keeps running while hidden)"
@@ -166,7 +179,6 @@ impl App {
                     "type 25m + enter   space start/pause   w stopwatch   r reset   esc x"
                 }
             }
-            _ => "not built yet   alt+q scratchpad   alt+w clipboard   alt+e calculator",
         }
     }
 
@@ -210,6 +222,7 @@ impl App {
         // every other tool would otherwise queue a refill it has no use for.
         self.generate.on_enter();
         self.calendar.on_enter();
+        self.color.on_enter();
         if self.active == ToolId::Generate {
             self.ask_for_entropy();
         }
@@ -285,6 +298,7 @@ impl App {
                 ToolId::Scratchpad => self.scratchpad.leave_one_level(),
                 ToolId::Clipboard => self.clipboard.leave_one_level(),
                 ToolId::Calendar => self.calendar.leave_one_level(),
+                ToolId::Color => self.color.leave_one_level(),
                 _ => false,
             };
             return if descended { Response::Redraw } else { Response::Dismiss };
@@ -325,6 +339,27 @@ impl App {
                     Response::Ignored
                 }
             }
+            ToolId::Color => {
+                // Ctrl+Y copies. It cannot be a bare letter: the input is free
+                // text, so every printable key belongs to it.
+                let outcome = if press.mods.ctrl && press.key == Key::Char('y') {
+                    self.color.copy_hex()
+                } else {
+                    self.color.on_key(press)
+                };
+                match outcome {
+                    ColorOutcome::Pick => {
+                        self.pending.push(Request::PickColor);
+                        Response::Redraw
+                    }
+                    ColorOutcome::Copy(text) => {
+                        self.pending.push(Request::SetClipboard(text));
+                        Response::Redraw
+                    }
+                    ColorOutcome::Redraw => Response::Redraw,
+                    ColorOutcome::Ignored => Response::Ignored,
+                }
+            }
             ToolId::Calendar => {
                 if self.calendar.on_key(press) {
                     if self.calendar.dirty {
@@ -360,7 +395,6 @@ impl App {
                 Outcome::Redraw => Response::Redraw,
                 Outcome::Ignored => Response::Ignored,
             },
-            _ => Response::Ignored,
         }
     }
 }
@@ -425,13 +459,16 @@ mod tests {
     }
 
     #[test]
-    fn unbuilt_tools_keep_their_key_and_say_so() {
-        // Color, not Calendar: Calendar was the example here until it was
-        // built, which is the point of the test -- the key stays put either way.
-        let mut app = App::new();
-        assert_eq!(app.on_key(KeyPress::alt('u'), 0), Response::Redraw);
-        assert_eq!(app.active, ToolId::Scratchpad, "an unbuilt tab must not steal focus");
-        assert!(app.notice.as_deref().unwrap().contains("Color"));
+    fn every_tool_in_the_roster_is_reachable_by_its_key() {
+        // There is no longer an unbuilt tool to test the "keeps its key and
+        // says so" path with -- all seven are built. That path still exists in
+        // `on_key` for the three unspent slots; this asserts the other half,
+        // that no key has drifted from its tool.
+        for tool in TOOLS.iter() {
+            let mut app = App::new();
+            app.on_key(KeyPress::alt(tool.key), 0);
+            assert_eq!(app.active, tool.id, "alt+{} did not reach {}", tool.key, tool.name);
+        }
     }
 
     #[test]

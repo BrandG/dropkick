@@ -11,8 +11,8 @@ Press a key. Do the thing. Get back to work.
 
 ## Status
 
-Pre-alpha. Six tools built: Scratchpad, Clipboard, Calculator, Calendar, Timer
-and Generate. The rest
+Pre-alpha. All seven tools built: Scratchpad, Clipboard, Calculator, Calendar,
+Timer, Generate and Color. Three keys stay deliberately unspent, and they
 show as dimmed tabs already holding their permanent keys, so nothing renumbers
 when they arrive.
 
@@ -177,6 +177,18 @@ There is no `month` or `year` unit, because neither is a fixed length. Months
 and years exist in date maths, where a calendar makes the answer well-defined —
 `2026-01-31 + 1 month` is the 28th of February, not the 3rd of March.
 
+Color converts between the ways a colour gets written: type `#6FB3F2`,
+`rgb(111, 179, 242)`, `hsl(210, 82%, 69%)` or a name like `tomato`, and it shows
+all of them at once with a swatch. `Tab` asks the desktop to pick a colour off
+the screen, and `Ctrl+Y` copies the hex. Those two are not letters
+because every letter you press is part of what you are typing.
+
+**The eyedropper does not currently work on COSMIC.** It is implemented and
+correct — the desktop's colour-picking portal accepts the request and then
+refuses it, without showing a picker, for every application that asks. Dropkick
+says so rather than appearing to hang. It will start working if COSMIC
+implements the method.
+
 ## Where your data lives
 
 These are your files. Go look at them, back them up yourself, delete them
@@ -325,7 +337,7 @@ and a key never moves once assigned:
 | `Alt+R` | Calendar | built — month grid, timed and all-day entries |
 | `Alt+T` | Timer/Stopwatch | built — countdown, stopwatch, notification |
 | `Alt+Y` | Generate | built — passwords and UUIDs; hashes planned |
-| `Alt+U` | Color | planned — converter and eyedropper |
+| `Alt+U` | Color | built — hex/rgb/hsl/names; eyedropper blocked by COSMIC |
 | `Alt+I` `Alt+O` `Alt+P` | — | deliberately unspent |
 
 Calculator takes a plain expression: `+ - * / % ^`, parentheses, `sqrt abs ln

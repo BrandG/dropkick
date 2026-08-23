@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-22
 
-Six of seven tools built. 233 tests, clippy clean at zero warnings.
+**All seven tools built.** 298 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -26,7 +26,7 @@ Six of seven tools built. 233 tests, clippy clean at zero warnings.
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
 | `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
-| `alt+u` | Color | not built — converter + eyedropper (needs D-Bus signals) |
+| `alt+u` | Color | built — hex/rgb/hsl/names; `tab` eyedropper is written but COSMIC refuses it |
 | `alt+i/o/p` | — | deliberately unspent |
 
 Summon is `Super+D`, bound in
@@ -125,6 +125,12 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**An interface existing does not mean it works.** `PickColor` is present on
+this system, introspectable, version 2, with a COSMIC backend that declares it —
+and it returns response code 2 in ~1ms without showing anything, for any client.
+Measured 2026-08-23; see the log. The eyedropper code is correct and stays.
+`GlobalShortcuts` at least had the decency to be absent.
+
 **`dropkick-core` has zero dependencies and must keep them.** Time enters as a
 `now_ms` parameter, never read inside; that is why expiry and the Esc ladder are
 testable without sleeping. Platform work goes in `dropkick-linux`; the core
@@ -165,11 +171,10 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence
   is not, and should not be started casually.
-- **Color** (`alt+u`) — converter is trivial; the eyedropper needs
-  `org.freedesktop.portal.Screenshot.PickColor`, which uses the portal's
-  Request/Response **signal** pattern. The D-Bus client has no signal support
-  yet. Same missing piece as encrypted pins and as making notifications
-  clickable.
+- **Clickable notifications, and encrypted pinned clipboard entries** — both
+  were blocked on D-Bus signal support, which the eyedropper has now added.
+  `Bus::pick_color` is the worked example: install the match rule *before* the
+  call, then read until the signal arrives.
 - **Help overlay** — agreed, unbuilt. `Alt+/`, not `?`: `?` is Shift+/ and is
   text in insert mode. Overlay, not a tab, so it costs no slot and drops into
   the Esc ladder.

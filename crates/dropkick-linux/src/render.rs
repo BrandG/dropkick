@@ -58,12 +58,7 @@ pub fn draw(
         ToolId::Timer => draw_timer(app, text, big, now_ms, canvas, content_top, content_bottom),
         ToolId::Generate => draw_generate(app, text, big, canvas, content_top, content_bottom),
         ToolId::Calendar => draw_calendar(app, text, canvas, content_top, content_bottom),
-        _ => {
-            let y = (content_top + content_bottom) as f32 / 2.0;
-            let msg = "not built yet";
-            let x = (canvas.w as f32 - text.width_of(msg)) / 2.0;
-            text.draw(canvas, x, y, msg, DIM);
-        }
+        ToolId::Color => draw_color(app, text, big, canvas, content_top, content_bottom),
     }
 
     draw_hints(app, text, canvas);
@@ -354,6 +349,89 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+fn draw_color(
+    app: &App,
+    text: &mut TextRenderer,
+    big: &mut TextRenderer,
+    canvas: &mut Canvas,
+    top: i32,
+    bottom: i32,
+) {
+    let c = &app.color;
+    let lh = text.line_height();
+    let input_baseline = bottom as f32 - lh * 0.6;
+
+    if let Some(col) = c.current {
+        // The swatch is the answer; everything else is a description of it.
+        let sw_x = PAD as i32;
+        let sw_y = top + 24;
+        let sw_w = 300;
+        let sw_h = 150;
+        let packed = (col.r as u32) << 16 | (col.g as u32) << 8 | col.b as u32;
+        canvas.fill_rect(sw_x, sw_y, sw_w, sw_h, packed);
+
+        // The hex, written on the swatch. Black or white by luminance, because
+        // one fixed colour is unreadable against half the spectrum.
+        let label = col.to_hex();
+        let on_swatch = if col.prefers_dark_text() { 0x00_0000 } else { 0xFF_FFFF };
+        // Drop to the small font when the big one will not fit inside the
+        // swatch. At 58px, seven characters are wider than 220px, so the label
+        // ran off the left edge and out of the panel.
+        let fits = big.width_of(&label) <= (sw_w - 16) as f32;
+        let (w, baseline_nudge) = if fits {
+            (big.width_of(&label), big.line_height() * 0.32)
+        } else {
+            (text.width_of(&label), text.line_height() * 0.32)
+        };
+        let lx = sw_x as f32 + ((sw_w as f32 - w) / 2.0).max(8.0);
+        let by = (sw_y + sw_h / 2) as f32 + baseline_nudge;
+        if fits {
+            big.draw(canvas, lx, by, &label, on_swatch);
+        } else {
+            text.draw(canvas, lx, by, &label, on_swatch);
+        }
+
+        let tx = (sw_x + sw_w) as f32 + PAD * 1.5;
+        let mut y = sw_y as f32 + lh * 1.4;
+        let (name, exact) = col.nearest_name();
+        for (label, value) in [
+            ("hex", col.to_hex()),
+            ("rgb", col.to_rgb_string()),
+            ("hsl", col.to_hsl_string()),
+            (if exact { "name" } else { "nearest" }, name.to_string()),
+        ] {
+            text.draw(canvas, tx, y, label, FAINT);
+            text.draw(canvas, tx + text.advance() * 9.0, y, &value, FG);
+            y += lh * 1.35;
+        }
+    } else if !c.picking {
+        let msg = "type a colour, or press tab to pick one off the screen";
+        text.draw(canvas, PAD, top as f32 + lh * 3.0, msg, FAINT);
+    }
+
+    if c.picking {
+        let msg = "click anywhere on screen to pick a colour";
+        text.draw(canvas, PAD, top as f32 + lh * 3.0, msg, ACCENT);
+    }
+
+    canvas.fill_rect(
+        PAD as i32,
+        (input_baseline - lh * 1.1) as i32,
+        canvas.w - PAD as i32 * 2,
+        1,
+        RULE,
+    );
+    let pen = text.draw(canvas, PAD, input_baseline, "> ", ACCENT);
+    let pen = text.draw(canvas, pen, input_baseline, &c.input, FG);
+    canvas.fill_rect(pen as i32 + 1, (input_baseline - lh * 0.72) as i32, 2, (lh * 0.85) as i32, ACCENT);
+
+    if let Some(p) = c.problem {
+        text.draw(canvas, PAD, input_baseline - lh * 1.8, p, ERR);
+    } else if let Some(n) = &c.notice {
+        text.draw(canvas, PAD, input_baseline - lh * 1.8, n, ACCENT);
+    }
+}
+
 /// Where the calculator's input line and error line sit, given the bottom of
 /// the content area. Split out from the drawing so the arithmetic can be
 /// tested: an error drawn past `bottom` lands under the hint row and off the

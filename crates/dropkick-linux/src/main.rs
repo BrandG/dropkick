@@ -116,6 +116,10 @@ enum Strategy {
     Recreate,
 }
 
+/// What the eyedropper thread sends back: a colour, a cancellation, or why it
+/// could not ask. Named because the raw type is unreadable inline.
+type Picked = Result<dropkick_linux::dbus::PickResult, String>;
+
 struct Dropkick {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -139,6 +143,8 @@ struct Dropkick {
     tick_token: Option<RegistrationToken>,
     /// The pending debounced calendar write, if one is armed.
     calendar_token: Option<RegistrationToken>,
+    /// Where the eyedropper thread posts its answer.
+    picked: channel::Sender<Picked>,
     /// True between asking for exclusive focus and actually getting it.
     grabbed_exclusive: bool,
     mods: Mods,
@@ -587,6 +593,37 @@ impl Dropkick {
             .ok();
     }
 
+    /// Run the portal's colour picker on a thread and post the result back.
+    ///
+    /// Off-thread because `pick_color` blocks until the user clicks something,
+    /// which may be tens of seconds or never. Running it inline would freeze
+    /// the panel with no way to cancel -- not even Esc, since the event loop
+    /// would not be reading keys.
+    ///
+    /// The thread posts to the same calloop channel the control socket uses,
+    /// so there is no new machinery and still no async runtime.
+    #[cfg(feature = "dbus")]
+    fn start_eyedropper(&mut self) {
+        // The panel is an overlay covering the top of the screen, and the
+        // portal is about to ask the user to click a pixel. Get out of the way.
+        self.hide();
+
+        let tx = self.picked.clone();
+        std::thread::spawn(move || {
+            let result = dropkick_linux::dbus::Bus::session()
+                .and_then(|mut bus| bus.pick_color())
+                .map_err(|e| e.to_string());
+            let _ = tx.send(result);
+        });
+    }
+
+    #[cfg(not(feature = "dbus"))]
+    fn start_eyedropper(&mut self) {
+        // Built with --no-default-features: there is no D-Bus code in the
+        // binary at all, so say so rather than appearing to hang.
+        self.app.color.picking_ended(Some("this build has no D-Bus support"));
+    }
+
     /// Randomness for Generate, straight from the kernel CSPRNG.
     ///
     /// `/dev/urandom` rather than a crate: `dropkick-core` has no dependencies
@@ -613,6 +650,7 @@ impl Dropkick {
                 Request::SetClipboardSecret(text) => self.set_clipboard(text, true, qh),
                 Request::Entropy(n) => self.supply_entropy(n),
                 Request::SaveCalendar => self.schedule_calendar_save(),
+                Request::PickColor => self.start_eyedropper(),
             }
         }
     }
@@ -840,6 +878,9 @@ fn main() {
 
     let pool = SlotPool::new((WIDTH * HEIGHT * 4) as usize, &shm).expect("shm pool");
 
+    // The eyedropper's answer comes back on its own channel, from a thread.
+    let (picked_tx, picked_rx) = channel::channel::<Picked>();
+
     let (tx, rx) = channel::channel::<ipc::Cmd>();
     handle
         .insert_source(rx, |ev, _, state: &mut Dropkick| {
@@ -856,6 +897,50 @@ fn main() {
             }
         })
         .expect("insert control channel");
+
+    handle
+        .insert_source(picked_rx, |ev, _, state: &mut Dropkick| {
+            let channel::Event::Msg(result) = ev else { return };
+            use dropkick_linux::dbus::PickResult;
+            match result {
+                Ok(PickResult::Picked(r, g, b)) => {
+                    // The portal reports 0..=1 doubles; the tool works in 8-bit
+                    // sRGB. Round rather than truncate, or 1.0 lands on 254.
+                    let to8 = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+                    state.app.color.set(dropkick_core::color::Color::new(
+                        to8(r),
+                        to8(g),
+                        to8(b),
+                    ));
+                    state.app.active = dropkick_core::ToolId::Color;
+                }
+                // Cancelling is not a failure, and must not leave the panel
+                // saying "pick a colour" forever.
+                Ok(PickResult::Cancelled(1)) => state.app.color.picking_ended(None),
+                // Any other code is the portal refusing rather than the user
+                // changing their mind, and saying so beats a silent shrug.
+                Ok(PickResult::Cancelled(code)) => {
+                    eprintln!("dropkickd: eyedropper: portal returned response code {code}");
+                    state.app.color.picking_ended(Some("the desktop refused the colour picker"));
+                }
+                Ok(PickResult::TimedOut) => {
+                    eprintln!("dropkickd: eyedropper: the portal never sent a Response");
+                    state.app.color.picking_ended(Some("the picker never answered"));
+                }
+                Ok(PickResult::Undecodable) => {
+                    eprintln!("dropkickd: eyedropper: could not read the portal's reply");
+                    state.app.color.picking_ended(Some("could not read the picker's answer"));
+                }
+                Err(e) => {
+                    eprintln!("dropkickd: eyedropper: {e}");
+                    state.app.color.picking_ended(Some("the colour picker did not answer"));
+                }
+            }
+            // Come back so the answer is visible. The panel hid itself to get
+            // out of the picker's way.
+            state.show();
+        })
+        .expect("insert eyedropper channel");
 
     let mut state = Dropkick {
         registry_state: RegistryState::new(&globals),
@@ -877,6 +962,7 @@ fn main() {
         big,
         tick_token: None,
         calendar_token: None,
+        picked: picked_tx,
         grabbed_exclusive: false,
         mods: Mods::default(),
         started: Instant::now(),
@@ -1204,6 +1290,29 @@ everywhere.";
             }),
         ),
         (
+            "color",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('u'), 0);
+                for c in "tomato".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+            }),
+        ),
+        (
+            "color-dark",
+            Box::new(|app: &mut App| {
+                // A dark colour, to check the label on the swatch flips to
+                // white. One fixed label colour is unreadable on half the
+                // spectrum, so this is the case worth looking at.
+                app.on_key(KeyPress::alt('u'), 0);
+                for c in "#1B2A4A".chars() {
+                    app.on_key(KeyPress::ch(c), 0);
+                }
+                app.on_key(KeyPress::plain(DkKey::Enter), 0);
+            }),
+        ),
+        (
             "calendar",
             Box::new(|app: &mut App| {
                 use dropkick_core::date::Date;
@@ -1304,12 +1413,6 @@ everywhere.";
                 for c in "1h30m".chars() {
                     app.on_key(KeyPress::ch(c), 0);
                 }
-            }),
-        ),
-        (
-            "unbuilt-tab",
-            Box::new(|app: &mut App| {
-                app.on_key(KeyPress::alt('r'), 0);
             }),
         ),
     ];

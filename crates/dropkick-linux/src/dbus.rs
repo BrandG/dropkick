@@ -34,6 +34,7 @@ const LITTLE_ENDIAN: u8 = b'l';
 const MSG_METHOD_CALL: u8 = 1;
 const MSG_METHOD_RETURN: u8 = 2;
 const MSG_ERROR: u8 = 3;
+const MSG_SIGNAL: u8 = 4;
 
 // Header field codes, from the specification.
 const FIELD_PATH: u8 = 1;
@@ -151,8 +152,22 @@ impl Encoder {
     }
 }
 
+fn read_f64_le(b: &[u8]) -> Option<f64> {
+    Some(f64::from_le_bytes(b.get(..8)?.try_into().ok()?))
+}
+
 fn read_u32_le(b: &[u8]) -> u32 {
     u32::from_le_bytes([b[0], b[1], b[2], b[3]])
+}
+
+/// A decoded message header plus its raw body.
+struct Message {
+    msg_type: u8,
+    reply_serial: u32,
+    body: Vec<u8>,
+    error_name: Option<String>,
+    /// The member name, which is how a signal is recognised.
+    member: Option<String>,
 }
 
 /// How hard a notification should try to be noticed.
@@ -169,6 +184,10 @@ pub enum Alert {
 pub struct Bus {
     stream: UnixStream,
     serial: u32,
+    /// The name the bus assigned us, like `:1.207`. Discarded until the
+    /// eyedropper needed it: the portal builds a Request's object path out of
+    /// it, and the match rule has to name that path before the call is made.
+    unique_name: String,
 }
 
 impl Bus {
@@ -181,7 +200,8 @@ impl Bus {
             .find_map(|part| part.strip_prefix("unix:path="))
             .ok_or_else(|| io::Error::other(format!("unsupported bus address: {addr}")))?;
 
-        let mut bus = Bus { stream: UnixStream::connect(path)?, serial: 0 };
+        let mut bus =
+            Bus { stream: UnixStream::connect(path)?, serial: 0, unique_name: String::new() };
         bus.authenticate()?;
         bus.hello()?;
         Ok(bus)
@@ -225,7 +245,7 @@ impl Bus {
 
     /// Every client must say Hello before the bus will route anything else.
     fn hello(&mut self) -> io::Result<()> {
-        self.call(
+        let reply = self.call(
             "org.freedesktop.DBus",
             "/org/freedesktop/DBus",
             "org.freedesktop.DBus",
@@ -233,6 +253,13 @@ impl Bus {
             "",
             Vec::new(),
         )?;
+        // The reply body is a single string: our unique name.
+        if reply.len() >= 4 {
+            let len = read_u32_le(&reply[..4]) as usize;
+            if reply.len() >= 4 + len {
+                self.unique_name = String::from_utf8_lossy(&reply[4..4 + len]).into_owned();
+            }
+        }
         Ok(())
     }
 
@@ -292,7 +319,8 @@ impl Bus {
     fn await_reply(&mut self, serial: u32) -> io::Result<Vec<u8>> {
         // Other traffic (signals, replies to Hello) can arrive first.
         for _ in 0..32 {
-            let (msg_type, reply_serial, body, error) = self.read_message()?;
+            let Message { msg_type, reply_serial, body, error_name: error, .. } =
+                self.read_message()?;
             if msg_type == MSG_ERROR && reply_serial == serial {
                 return Err(io::Error::other(format!(
                     "{}: {}",
@@ -310,8 +338,8 @@ impl Bus {
         Err(io::Error::other("no reply from the bus"))
     }
 
-    /// Returns (type, reply_serial, body, error_name).
-    fn read_message(&mut self) -> io::Result<(u8, u32, Vec<u8>, Option<String>)> {
+    /// One message off the bus.
+    fn read_message(&mut self) -> io::Result<Message> {
         let mut fixed = [0u8; 16];
         self.stream.read_exact(&mut fixed)?;
         if fixed[0] != LITTLE_ENDIAN {
@@ -325,9 +353,88 @@ impl Bus {
         let mut rest = vec![0u8; padded_fields + body_len];
         self.stream.read_exact(&mut rest)?;
 
-        let (reply_serial, error_name) = parse_header_fields(&rest[..fields_len]);
+        let (reply_serial, error_name, member) = parse_header_fields(&rest[..fields_len]);
         let body = rest[padded_fields..].to_vec();
-        Ok((msg_type, reply_serial, body, error_name))
+        Ok(Message { msg_type, reply_serial, body, error_name, member })
+    }
+
+    /// Ask the desktop portal for a colour picked off the screen.
+    ///
+    /// This is the first thing here that needs a **signal**, and it is why the
+    /// eyedropper waited for the rest of the tools. `PickColor` does not return
+    /// the colour; it returns an object path for a pending Request, and the
+    /// answer arrives later as `org.freedesktop.portal.Request.Response` on
+    /// that path -- after the user has clicked something, which may be never.
+    ///
+    /// Two consequences:
+    ///
+    /// * A match rule has to be installed **before** the call. Installing it
+    ///   afterwards is a race the user would lose by picking quickly.
+    /// * This blocks until the user picks or cancels, so it must not run on
+    ///   the daemon's thread. See `eyedropper` in `main.rs`.
+    ///
+    /// Returns `Ok(None)` when the user cancelled, which is not an error.
+    pub fn pick_color(&mut self) -> io::Result<PickResult> {
+        // The portal derives the Request path from our bus name and a token, so
+        // the rule can be installed before anything is sent.
+        let token = "dropkick_pick";
+        let sender = self.unique_name.trim_start_matches(':').replace('.', "_");
+        let handle = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
+
+        let mut rule = Encoder::new();
+        rule.string(&format!(
+            "type='signal',interface='org.freedesktop.portal.Request',member='Response',path='{handle}'"
+        ));
+        self.call(
+            "org.freedesktop.DBus",
+            "/org/freedesktop/DBus",
+            "org.freedesktop.DBus",
+            "AddMatch",
+            "s",
+            rule.into_bytes(),
+        )?;
+
+        let mut body = Encoder::new();
+        body.string(""); // parent_window: we are a layer surface, so none
+        body.array(8, |opts| {
+            opts.dict_entry_string("handle_token", token);
+        });
+        self.call(
+            "org.freedesktop.portal.Desktop",
+            "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Screenshot",
+            "PickColor",
+            "sa{sv}",
+            body.into_bytes(),
+        )?;
+
+        // Wait for the Response, but not forever. The user is being asked to
+        // click something and may take a while, so there is no message-count
+        // limit like `await_reply` has -- but without a deadline a portal that
+        // never answers parks this thread for the life of the daemon, holding
+        // the panel hidden with nothing to explain it.
+        self.stream.set_read_timeout(Some(std::time::Duration::from_secs(120)))?;
+        loop {
+            let msg = match self.read_message() {
+                Ok(m) => m,
+                Err(e)
+                    if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) =>
+                {
+                    return Ok(PickResult::TimedOut);
+                }
+                Err(e) => return Err(e),
+            };
+            if msg.msg_type != MSG_SIGNAL || msg.member.as_deref() != Some("Response") {
+                if std::env::var_os("DROPKICK_DEBUG").is_some() {
+                    eprintln!("  [pick] ignoring type {} member {:?}", msg.msg_type, msg.member);
+                }
+                continue;
+            }
+            if std::env::var_os("DROPKICK_DEBUG").is_some() {
+                eprintln!("  [pick] response body: {} bytes", msg.body.len());
+            }
+            return Ok(parse_pick_response(&msg.body));
+        }
     }
 
     /// Post a desktop notification. Returns the server's notification id.
@@ -380,10 +487,76 @@ impl Bus {
 }
 
 /// Pull REPLY_SERIAL and ERROR_NAME out of a header field array.
-fn parse_header_fields(mut fields: &[u8]) -> (u32, Option<String>) {
+/// Decode `(u response, a{sv} results)` far enough to find `color`, which is a
+/// `(ddd)` of red, green and blue in 0..=1.
+///
+/// Hand-rolled and deliberately narrow: a general variant decoder is a lot of
+/// surface for one message shape. It walks to the doubles rather than parsing
+/// the dictionary properly, and returns `None` on anything unexpected.
+pub fn parse_pick_response(body: &[u8]) -> PickResult {
+    if body.len() < 4 {
+        return PickResult::Undecodable;
+    }
+    // 0 = success. 1 = the user cancelled, 2 = something else ended it; both
+    // are "no colour", not failures to report.
+    let response = read_u32_le(&body[..4]);
+    if response != 0 {
+        return PickResult::Cancelled(response);
+    }
+    // Find the "color" key, then the three doubles that follow it. Doubles are
+    // 8-aligned, so scan forward to the first alignment boundary that yields
+    // three plausible values.
+    let key = b"color";
+    let Some(found) = body.windows(key.len()).position(|w| w == key) else {
+        return PickResult::Undecodable;
+    };
+    let at = found + key.len();
+    // Inclusive of the last offset that still has 24 bytes after it. An
+    // exclusive bound here misses the common case, where the doubles are the
+    // final thing in the body.
+    let mut start = at.next_multiple_of(8);
+    while start + 24 <= body.len() {
+        let (Some(r), Some(g), Some(b)) = (
+            read_f64_le(&body[start..]),
+            read_f64_le(&body[start + 8..]),
+            read_f64_le(&body[start + 16..]),
+        ) else {
+            break;
+        };
+        // Colour components are 0..=1. Anything else means the scan landed on
+        // padding or on the signature rather than the values.
+        let ok = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        if ok(r) && ok(g) && ok(b) {
+            return PickResult::Picked(r, g, b);
+        }
+        start += 8;
+    }
+    // Success was reported but the payload was not what was expected. This
+    // used to be indistinguishable from a cancellation, which meant a decoding
+    // bug looked exactly like the user changing their mind.
+    PickResult::Undecodable
+}
+
+/// What came back from a colour pick. Cancellation and "could not read the
+/// reply" are deliberately different: reporting a decode failure as a
+/// cancellation hides the bug and tells the user nothing.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PickResult {
+    Picked(f64, f64, f64),
+    /// The portal said no. Carries the response code: 1 is the user
+    /// cancelling, anything else is the portal ending it for its own reasons.
+    Cancelled(u32),
+    Undecodable,
+    /// The portal never answered. Distinct from every other case: it means the
+    /// request was accepted and then nothing came back.
+    TimedOut,
+}
+
+fn parse_header_fields(mut fields: &[u8]) -> (u32, Option<String>, Option<String>) {
     const FIELD_REPLY_SERIAL: u8 = 5;
     let mut reply_serial = 0u32;
     let mut error_name = None;
+    let mut member = None;
     let start = fields.as_ptr() as usize;
 
     while fields.len() >= 4 {
@@ -431,6 +604,8 @@ fn parse_header_fields(mut fields: &[u8]) -> (u32, Option<String>) {
                 let value = String::from_utf8_lossy(&fields[pad + 4..pad + 4 + len]).into_owned();
                 if code == FIELD_ERROR_NAME {
                     error_name = Some(value);
+                } else if code == FIELD_MEMBER {
+                    member = Some(value);
                 }
                 fields = &fields[pad + 4 + len + 1..];
             }
@@ -444,7 +619,7 @@ fn parse_header_fields(mut fields: &[u8]) -> (u32, Option<String>) {
             _ => break,
         }
     }
-    (reply_serial, error_name)
+    (reply_serial, error_name, member)
 }
 
 #[cfg(test)]
@@ -553,7 +728,7 @@ mod tests {
             f.signature("u");
             f.u32(42);
         });
-        let (serial, err) = parse_header_fields(&fields.into_bytes());
+        let (serial, err, _) = parse_header_fields(&fields.into_bytes());
         assert_eq!(serial, 42);
         assert!(err.is_none());
     }
@@ -566,7 +741,7 @@ mod tests {
             f.signature("s");
             f.string("org.freedesktop.DBus.Error.ServiceUnknown");
         });
-        let (_, err) = parse_header_fields(&fields.into_bytes());
+        let (_, err, _) = parse_header_fields(&fields.into_bytes());
         assert_eq!(err.as_deref(), Some("org.freedesktop.DBus.Error.ServiceUnknown"));
     }
 
@@ -582,5 +757,72 @@ mod tests {
         for cut in 0..bytes.len() {
             let _ = parse_header_fields(&bytes[..cut]);
         }
+    }
+}
+
+#[cfg(test)]
+mod pick_tests {
+    use super::*;
+
+    /// Build a plausible Response body: `(u, a{sv})` with one `color` entry
+    /// holding `(ddd)`.
+    fn body(response: u32, rgb: (f64, f64, f64)) -> Vec<u8> {
+        let mut v = Vec::new();
+        v.extend_from_slice(&response.to_le_bytes());
+        // The array and dict framing is not what the decoder reads -- it scans
+        // for the key and then for aligned doubles -- so it only has to be
+        // shaped realistically, with the key present and the values 8-aligned.
+        v.extend_from_slice(b"\0\0\0\0"); // array length placeholder
+        v.extend_from_slice(b"color\0");
+        while v.len() % 8 != 0 {
+            v.push(0);
+        }
+        for c in [rgb.0, rgb.1, rgb.2] {
+            v.extend_from_slice(&c.to_le_bytes());
+        }
+        v
+    }
+
+    #[test]
+    fn a_successful_response_yields_the_colour() {
+        let PickResult::Picked(r, g, b) = parse_pick_response(&body(0, (0.5, 0.25, 1.0))) else {
+            panic!("should decode");
+        };
+        assert!((r - 0.5).abs() < 1e-12);
+        assert!((g - 0.25).abs() < 1e-12);
+        assert!((b - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn cancelling_and_failing_to_decode_are_told_apart() {
+        // Response code 1 is "user cancelled". Not an error, and definitely not
+        // a colour -- reading the payload anyway would invent one.
+        assert_eq!(parse_pick_response(&body(1, (0.5, 0.5, 0.5))), PickResult::Cancelled(1));
+        assert_eq!(parse_pick_response(&body(2, (0.5, 0.5, 0.5))), PickResult::Cancelled(2));
+    }
+
+    #[test]
+    fn a_truncated_or_empty_body_does_not_panic() {
+        let full = body(0, (0.1, 0.2, 0.3));
+        for n in 0..full.len() {
+            let _ = parse_pick_response(&full[..n]);
+        }
+        assert_eq!(parse_pick_response(&[]), PickResult::Undecodable);
+    }
+
+    #[test]
+    fn values_outside_zero_to_one_are_rejected_as_a_bad_scan() {
+        // The decoder scans for aligned doubles, so its guard against landing
+        // on padding is that colour components are 0..=1.
+        let bad = body(0, (5.0, -1.0, 1e30));
+        assert_eq!(parse_pick_response(&bad), PickResult::Undecodable);
+    }
+
+    #[test]
+    fn a_body_without_the_key_finds_nothing() {
+        let mut v = Vec::new();
+        v.extend_from_slice(&0u32.to_le_bytes());
+        v.extend_from_slice(b"something else entirely\0");
+        assert_eq!(parse_pick_response(&v), PickResult::Undecodable);
     }
 }
