@@ -41,6 +41,16 @@ const BORDER: u32 = 0x5A_6B82;
 const BORDER_W: i32 = 1;
 /// Corner radius. Small on purpose: this is a utility panel, not a phone card.
 const RADIUS: i32 = 10;
+/// Whether the top corners are rounded.
+///
+/// **False, and tied to `Anchor::TOP` in `main.rs`.** The panel is anchored to
+/// the top of the screen with no margin, so its top edge is flush at y=0.
+/// Rounding a corner that sits against the screen edge cuts a notch out of
+/// nothing and makes the panel look like it slid off the top; edge-docked
+/// surfaces square the docked edge and round the free ones.
+///
+/// If the anchor ever gains a margin, or moves, set this true.
+const ROUND_TOP: bool = false;
 
 /// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
 /// clock that can be stale, and the timer readout is the one thing here that
@@ -91,7 +101,10 @@ fn round_corners(canvas: &mut Canvas) {
         return;
     }
     // Arc centres, one per corner, each inset by the radius.
-    let corners = [(r, r, -1, -1), (w - 1 - r, r, 1, -1), (r, h - 1 - r, -1, 1), (w - 1 - r, h - 1 - r, 1, 1)];
+    let bottom = [(r, h - 1 - r, -1, 1), (w - 1 - r, h - 1 - r, 1, 1)];
+    let top = [(r, r, -1, -1), (w - 1 - r, r, 1, -1)];
+    let corners: Vec<_> =
+        if ROUND_TOP { top.iter().chain(bottom.iter()).copied().collect() } else { bottom.to_vec() };
 
     for (cx, cy, sx, sy) in corners {
         // Inclusive of r: the arc centre is inset by exactly the radius, so
@@ -847,14 +860,22 @@ mod tests {
     }
 
     #[test]
-    fn the_corners_are_actually_cut_away() {
+    fn the_bottom_corners_are_cut_away() {
         let (buf, w, h) = rendered(255);
-        // The extreme corner pixel of each side is outside the arc.
-        for (x, y) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+        for (x, y) in [(0, h - 1), (w - 1, h - 1)] {
             assert_eq!(alpha_at(&buf, w, x, y), 0, "corner ({x},{y}) should be transparent");
         }
-        // And the middle is not.
-        assert_eq!(alpha_at(&buf, w, w / 2, h / 2), 255);
+        assert_eq!(alpha_at(&buf, w, w / 2, h / 2), 255, "and the middle is not");
+    }
+
+    #[test]
+    fn the_top_corners_stay_square_because_the_panel_is_docked_there() {
+        // Anchor::TOP with no margin puts the top edge at y=0. A rounded corner
+        // against the screen edge is a notch cut out of nothing.
+        let (buf, w, _h) = rendered(255);
+        for (x, y) in [(0, 0), (w - 1, 0)] {
+            assert_eq!(alpha_at(&buf, w, x, y), 255, "corner ({x},{y}) should be square");
+        }
     }
 
     #[test]
@@ -862,8 +883,9 @@ mod tests {
         // Somewhere along each arc there must be a partially covered pixel, or
         // the curve is a staircase.
         let (buf, w, _h) = rendered(255);
+        let h = HEIGHT as i32;
         let soft = (0..RADIUS)
-            .flat_map(|i| (0..RADIUS).map(move |j| (i, j)))
+            .flat_map(|i| (0..RADIUS).map(move |j| (i, h - 1 - j)))
             .filter(|(i, j)| {
                 let a = alpha_at(&buf, w, *i, *j);
                 a > 0 && a < 255
@@ -876,7 +898,7 @@ mod tests {
     fn opacity_scales_the_whole_panel_and_leaves_the_cut_alone() {
         let (buf, w, h) = rendered(128);
         assert_eq!(alpha_at(&buf, w, w / 2, h / 2), 128, "interior should be half opaque");
-        assert_eq!(alpha_at(&buf, w, 0, 0), 0, "a cut corner cannot become visible");
+        assert_eq!(alpha_at(&buf, w, 0, h - 1), 0, "a cut corner cannot become visible");
     }
 
     #[test]

@@ -1605,6 +1605,26 @@ Which is the lesson worth keeping: **`--shot` can no longer review this part of
 the UI.** PPM cannot represent transparency. `cargo run --example preview`
 composites over a checkerboard and is the way to look at corners and opacity.
 
+### Only the bottom corners are rounded (user, 2026-08-23)
+
+"If the panel is stuck to the top, do we need an upper corner?" No. Verified
+rather than assumed: `set_anchor(Anchor::TOP)` with no margin and no exclusive
+zone, so the top edge is flush at y=0. A rounded corner against the screen edge
+cuts a notch out of nothing and makes the panel look like it slid off the top.
+Edge-docked surfaces square the docked edge and round the free ones.
+
+`ROUND_TOP` is a constant tied by comment to the anchor in `main.rs`; if the
+anchor ever gains a margin or moves, set it true. Two tests pin both halves —
+the bottom corners transparent, the top corners opaque — so the pair cannot
+drift silently.
+
+Worth recording how this was checked, because the first look got it wrong: a
+zoomed crop that stacked the top and bottom edges into one image read as a
+rounded top corner, and it was the seam. Sampling the actual pixels settled it
+— `(90,107,130)`, the border colour, at both top corners, and exactly the
+background values at both bottom ones. **Zoomed crops of two places at once are
+a bad way to compare them.**
+
 ### On the shadow, deferred
 
 Not screen real estate: the panel is 37% x 29% of this 2560x1600 display, and a
