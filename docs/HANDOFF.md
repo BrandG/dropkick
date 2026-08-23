@@ -179,6 +179,16 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   were blocked on D-Bus signal support, which the eyedropper has now added.
   `Bus::pick_color` is the worked example: install the match rule *before* the
   call, then read until the signal arrives.
+- **The eyedropper, for real** (`alt+u`) — deferred to a later point release,
+  not abandoned. The portal route is written and switched off because COSMIC
+  refuses `PickColor`; see the log for the traced exchange. The route that would
+  actually work here is native: cosmic-comp exports
+  `ext_image_copy_capture_manager_v1`, and Dropkick already speaks Wayland, so
+  capturing the screen and reading the pixel under the cursor needs no D-Bus and
+  no dependency — the same call as hand-rolling the D-Bus client rather than
+  taking one. Real work: the capture protocol, a full-screen picker surface, and
+  cursor handling. Turning the existing portal path back on is one field
+  (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
 - **Help overlay** — agreed, unbuilt. `Alt+/`, not `?`: `?` is Shift+/ and is
   text in insert mode. Overlay, not a tab, so it costs no slot and drops into
   the Esc ladder.

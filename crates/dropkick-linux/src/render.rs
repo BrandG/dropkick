@@ -34,6 +34,11 @@ const RULE: u32 = 0x23_2932;
 // through. Picked off TAB_ACTIVE rather than ACCENT for that reason -- an accent
 // wash bright enough to notice made the glyphs on top of it worse.
 const SELECT: u32 = 0x2E_3A4B;
+// The panel's outer edge. Bright enough to read against a dark window behind
+// it, which is the case that prompted this: two dark surfaces butted together
+// with no seam look like one window.
+const BORDER: u32 = 0x5A_6B82;
+const BORDER_W: i32 = 1;
 
 /// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
 /// clock that can be stale, and the timer readout is the one thing here that
@@ -62,6 +67,20 @@ pub fn draw(
     }
 
     draw_hints(app, text, canvas);
+    draw_border(canvas);
+}
+
+/// A hairline around the whole panel, drawn last so nothing paints over it.
+///
+/// Dropkick is a layer surface with no decoration, no title bar and no shadow,
+/// so against a window of a similar colour its edge simply is not there. This
+/// is the cheapest thing that says where it stops.
+fn draw_border(canvas: &mut Canvas) {
+    let (w, h, t) = (canvas.w, canvas.h, BORDER_W);
+    canvas.fill_rect(0, 0, w, t, BORDER);
+    canvas.fill_rect(0, h - t, w, t, BORDER);
+    canvas.fill_rect(0, 0, t, h, BORDER);
+    canvas.fill_rect(w - t, 0, t, h, BORDER);
 }
 
 fn draw_tabs(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {

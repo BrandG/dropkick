@@ -1534,6 +1534,29 @@ no D-Bus and no dependency — the same shape as hand-rolling the D-Bus client
 rather than taking one. It is real work: the capture protocol, a full-screen
 picker surface, and cursor handling. Not started.
 
+## A BORDER — 2026-08-23 (user)
+
+"The window doesn't blend with similarly-colored nearby windows."
+
+Dropkick is a layer surface: no decoration, no title bar, no shadow. Against a
+window of a similar colour its edge simply is not there, and the panel reads as
+part of whatever is behind it.
+
+A one-pixel hairline in `0x5A6B82`, drawn **last** so nothing paints over it —
+the tab bar and hint row both run to the panel edge.
+
+Checked against the worst case rather than a convenient one: the panel
+composited onto a background of `0x14171C`, which is its own background colour
+exactly. If the edge shows there it shows anywhere. It does.
+
+`BORDER` and `BORDER_W` are constants, so the weight and colour are one line
+each to change.
+
+**Rounded corners are possible but not done.** The buffer is `Argb8888` and no
+opaque region is declared, so the compositor would honour transparent corner
+pixels. `Canvas::set` forces alpha to `0xFF`, so it would need a way to write a
+transparent pixel first.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
