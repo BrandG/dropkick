@@ -168,8 +168,13 @@ impl App {
             ToolId::Color => {
                 if self.color.picking {
                     "pick a colour anywhere on screen   esc cancels"
-                } else {
+                } else if self.color.eyedropper {
                     "type #6FB3F2 / rgb(...) / hsl(...) / a name   tab eyedropper   ctrl-y copy"
+                } else {
+                    // No `tab eyedropper` here: the hint row lists keys that
+                    // work, and advertising one that cannot is how the row
+                    // stops being trusted.
+                    "type #6FB3F2 / rgb(...) / hsl(...) / a name   ctrl-y copy   esc x"
                 }
             }
             ToolId::Timer => {

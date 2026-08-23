@@ -26,7 +26,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
 | `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
-| `alt+u` | Color | built — hex/rgb/hsl/names; `tab` eyedropper is written but COSMIC refuses it |
+| `alt+u` | Color | built — hex/rgb/hsl/names; eyedropper written but **switched off**, COSMIC refuses it |
 | `alt+i/o/p` | — | deliberately unspent |
 
 Summon is `Super+D`, bound in
@@ -124,6 +124,10 @@ beside the target and renames it over. The temp must be in the same directory
 (rename is only atomic within a filesystem) and is created `0600` from the
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
+
+**The eyedropper is off behind one line.** `ColorTool::new` sets
+`eyedropper: false`; everything behind it — the portal call, the match rule, the
+signal decoding — is written and tested. Flip that field to try it again.
 
 **An interface existing does not mean it works.** `PickColor` is present on
 this system, introspectable, version 2, with a COSMIC backend that declares it —

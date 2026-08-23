@@ -206,11 +206,24 @@ pub struct ColorTool {
     /// can say why nothing is happening.
     pub picking: bool,
     pub notice: Option<String>,
+    /// Whether the eyedropper is offered at all. See [`Self::new`].
+    pub eyedropper: bool,
 }
 
 impl ColorTool {
+    /// The eyedropper is **off**, and the switch is one line.
+    ///
+    /// It is written, tested, and correct: the portal builds the Request path
+    /// the match rule predicts, the signal arrives, and the reply decodes. What
+    /// it decodes to is a refusal — COSMIC returns response code 2 in about a
+    /// millisecond, showing no picker, for every client that asks. Measured
+    /// 2026-08-23; the exchange is in `docs/PROJECT_LOG.md`.
+    ///
+    /// So the key is not offered rather than offered and broken. Set this true
+    /// to try it again — if COSMIC ships an implementation, that is the whole
+    /// change, and everything behind it still works.
     pub fn new() -> Self {
-        Self::default()
+        ColorTool { eyedropper: false, ..Self::default() }
     }
 
     pub fn set(&mut self, c: Color) {
@@ -263,6 +276,13 @@ impl ColorTool {
             }
             // Tab, not a letter: every printable key is part of the input.
             Key::Tab => {
+                if !self.eyedropper {
+                    // Say why rather than doing nothing. A key that is
+                    // documented and then silently inert is worse than one that
+                    // explains itself.
+                    self.problem = Some("the eyedropper is off: this desktop refuses colour picking");
+                    return Outcome::Redraw;
+                }
                 self.picking = true;
                 self.problem = None;
                 Outcome::Pick
@@ -508,13 +528,31 @@ mod tests {
     #[test]
     fn tab_asks_for_the_eyedropper_and_says_it_is_waiting() {
         let mut t = ColorTool::new();
+        t.eyedropper = true;
         assert_eq!(t.on_key(KeyPress::plain(Key::Tab)), Outcome::Pick);
         assert!(t.picking);
     }
 
     #[test]
+    fn the_eyedropper_is_off_by_default() {
+        // COSMIC refuses the portal call, so the key is not offered. Everything
+        // behind it still works; this is the one line that turns it back on.
+        let t = ColorTool::new();
+        assert!(!t.eyedropper);
+    }
+
+    #[test]
+    fn tab_explains_itself_when_the_eyedropper_is_off() {
+        let mut t = ColorTool::new();
+        assert_eq!(t.on_key(KeyPress::plain(Key::Tab)), Outcome::Redraw);
+        assert!(!t.picking, "it must not pretend to be picking");
+        assert!(t.problem.is_some(), "a documented key must not be silently inert");
+    }
+
+    #[test]
     fn a_cancelled_pick_does_not_strand_the_panel() {
         let mut t = ColorTool::new();
+        t.eyedropper = true;
         t.on_key(KeyPress::plain(Key::Tab));
         t.picking_ended(None);
         assert!(!t.picking, "otherwise it says 'pick a colour' forever");
@@ -551,6 +589,7 @@ mod tests {
     #[test]
     fn esc_cancels_a_pending_pick_first() {
         let mut t = ColorTool::new();
+        t.eyedropper = true;
         t.on_key(KeyPress::plain(Key::Tab));
         assert!(t.leave_one_level());
         assert!(!t.picking);
@@ -559,6 +598,7 @@ mod tests {
     #[test]
     fn summoning_does_not_resume_a_pick_that_can_never_answer() {
         let mut t = ColorTool::new();
+        t.eyedropper = true;
         t.on_key(KeyPress::plain(Key::Tab));
         t.on_enter();
         assert!(!t.picking);

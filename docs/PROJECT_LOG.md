@@ -1518,8 +1518,14 @@ was absent and could be detected by introspection. This one is present,
 introspectable, version 2, with a backend that claims it — and still does not
 work. Introspection is not evidence of function; only calling it is.
 
-The code stays as written. It is correct, it is tested, and it will start
-working the day COSMIC implements the method, with no change here.
+**Switched off, not deleted** (user, 2026-08-23). `ColorTool::new` sets
+`eyedropper: false`, so `Tab` explains itself instead of hiding the panel and
+waiting on a refusal. Everything behind the flag is intact and still tested; the
+tests that exercise the picking path set it true. Flipping that one field is the
+whole of turning it back on.
+
+`Tab` says why rather than doing nothing. A key that is documented and then
+silently inert is worse than one that admits it cannot work.
 
 **A native alternative exists if the eyedropper is wanted for real.** cosmic-comp
 exports `ext_image_copy_capture_manager_v1`, and Dropkick already speaks

@@ -179,15 +179,16 @@ and years exist in date maths, where a calendar makes the answer well-defined �
 
 Color converts between the ways a colour gets written: type `#6FB3F2`,
 `rgb(111, 179, 242)`, `hsl(210, 82%, 69%)` or a name like `tomato`, and it shows
-all of them at once with a swatch. `Tab` asks the desktop to pick a colour off
-the screen, and `Ctrl+Y` copies the hex. Those two are not letters
-because every letter you press is part of what you are typing.
+all of them at once with a swatch. `Ctrl+Y` copies the hex — a chord rather than a
+letter, because every letter you press is part of what you are typing.
 
-**The eyedropper does not currently work on COSMIC.** It is implemented and
-correct — the desktop's colour-picking portal accepts the request and then
-refuses it, without showing a picker, for every application that asks. Dropkick
-says so rather than appearing to hang. It will start working if COSMIC
-implements the method.
+**The eyedropper is built but switched off.** It would pick a colour off the
+screen through the desktop's colour portal, and it is implemented, tested and
+correct: the request goes out, the reply comes back, and the reply is a refusal.
+COSMIC accepts the call and then declines it in about a millisecond, showing no
+picker, for every application that asks — not just this one. Rather than offer a
+key that cannot work, `Tab` says so. One line in `color.rs` turns it back on if
+COSMIC ever implements the method.
 
 ## Where your data lives
 
