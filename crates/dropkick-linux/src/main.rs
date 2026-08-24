@@ -215,6 +215,17 @@ impl Dropkick {
             // applies silently is indistinguishable from one that did not.
             self.app.notice = Some("settings reloaded".to_string());
         }
+        // If the file was topped up with settings it predated, say which. This
+        // is the only way the user finds out without opening the file, and the
+        // point of appending was that they should not have to be told twice.
+        let added = self.settings.take_added();
+        if !added.is_empty() {
+            self.app.notice = Some(format!(
+                "{} new setting(s) added to your config: {}",
+                added.len(),
+                added.join(", ")
+            ));
+        }
         // The daemon can be up for days, so the calendar's idea of "today" has
         // to be refreshed rather than fixed at startup. set_today only moves
         // the focus if it was already sitting on today.

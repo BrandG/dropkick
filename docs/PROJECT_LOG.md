@@ -1665,6 +1665,55 @@ the unlit ones competes with it.
 The committed screenshots were regenerated, since every one of them shows a tab
 bar.
 
+## NEW SETTINGS ARE APPENDED TO AN OLD FILE — 2026-08-24 (user)
+
+Found by the user asking where the settings file was, in order to try
+`panel.opacity`. Their file was from 2026-08-16 and had three `timer.*` keys and
+nothing else — no `generate.*`, no `panel.opacity`.
+
+Nothing was broken: a missing key takes its default. But **the stated property
+was**. The design note for settings says options should be "discoverable by
+opening the file rather than by reading documentation", and that only ever held
+for a file written today. Anyone whose config predates a setting gets the
+default and no hint there was a choice.
+
+**Chosen: append** (user), over merely reporting. Reporting is cheaper and less
+presumptuous, but it does not restore the property — you would still have to go
+and look up what the new settings were.
+
+### How it stays safe
+
+The program is editing a file the user owns, so:
+
+- **Append only.** Existing lines are never touched, so an edited value cannot
+  be reverted and nothing is reordered.
+- **Only the absent keys of a block.** `generate.*` share one comment; appending
+  the whole block would repeat keys already present, and a later duplicate wins
+  in `parse`, so it would quietly overwrite an edit with the default. There is a
+  test for exactly that.
+- **The result must parse before it is written.** If the generated text would
+  produce an unknown key, nothing is written and it says so. The bar for editing
+  someone's file is higher than "it compiled".
+- **Through `write_atomic`**, so an interrupted write cannot leave half a config,
+  and the file lands `0600` even if it was looser before.
+- **Idempotent**, and our own write's mtime is recorded, or the next summon would
+  see a changed file and re-read for nothing.
+
+The blocks are **derived from `Config::default_file`** rather than listed a
+second time. Adding a setting to that string is the whole of making old files
+offer it — there is no second place to forget.
+
+A commented-out key counts as absent and is offered again: the file no longer
+lists it as an option, which is the thing being fixed.
+
+### And a harness mistake worth recording
+
+The first attempt to check this end-to-end ran `dropkickd --shot` against a copy
+of the config and reported success because the file was unchanged. **`--shot`
+exits before settings are ever loaded**, so it proved nothing. The seam now has
+tests that construct `Settings` against a temp path directly, plus a real run
+that took the user's own file from 4 keys to 10.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

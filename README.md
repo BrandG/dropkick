@@ -128,6 +128,13 @@ Edits apply on the **next summon** — the file is checked every time the panel
 opens, and re-read only when it has actually changed. There is nothing to
 restart and no reload command to remember.
 
+If a Dropkick update adds a setting, it is **appended to your file** with its
+explanatory comment, and the panel says which ones arrived. That keeps the
+promise above true for a file you wrote months ago: opening it still tells you
+what the options are. Your existing lines are never touched — the file is only
+ever added to, so an edited value cannot be reverted and nothing is reordered.
+A setting you commented out is offered again, since the file no longer lists it.
+
 ```
 timer.notify = true      # notify when a countdown finishes
 timer.sound = true       # ask the server to play a sound with it

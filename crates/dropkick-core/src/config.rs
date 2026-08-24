@@ -63,6 +63,54 @@ impl Default for Config {
     }
 }
 
+/// Every `key = value` name present in a settings file, ignoring comments.
+fn keys_in(text: &str) -> Vec<&str> {
+    text.lines()
+        .filter_map(|raw| {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            line.split_once('=').map(|(k, _)| k.trim())
+        })
+        .collect()
+}
+
+/// The default file, split into (comment, keys) blocks on blank lines.
+///
+/// Derived from [`Config::default_file`] rather than duplicated, so there is
+/// exactly one list of settings in this crate. Adding a setting to that string
+/// is all it takes for an old config file to be offered it.
+fn blocks() -> Vec<(String, Vec<String>)> {
+    let mut out = Vec::new();
+    for chunk in Config::default_file().split("\n\n") {
+        let mut comment = String::new();
+        let mut keys = Vec::new();
+        for line in chunk.lines() {
+            let t = line.trim();
+            if t.starts_with('#') {
+                comment.push_str(line);
+                comment.push('\n');
+            } else if let Some((k, _)) = t.split_once('=') {
+                keys.push(k.trim().to_string());
+            }
+        }
+        if !keys.is_empty() {
+            out.push((comment, keys));
+        }
+    }
+    out
+}
+
+/// The `key = value` line for `key`, exactly as the default file writes it.
+fn default_line_for(key: &str) -> Option<String> {
+    Config::default_file().lines().find_map(|line| {
+        let t = line.trim();
+        if t.starts_with('#') {
+            return None;
+        }
+        let (k, _) = t.split_once('=')?;
+        (k.trim() == key).then(|| line.to_string())
+    })
+}
+
 /// A key that was not recognised, with the line it was on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Unknown {
@@ -117,6 +165,58 @@ impl Config {
             }
         }
         (config, unknown)
+    }
+
+    /// Which settings the default file knows about but `existing` does not.
+    ///
+    /// The point of the settings file is that opening it tells you what the
+    /// options are. That only holds for a file written today: a config from
+    /// before a setting existed silently gets the default and offers no hint
+    /// that there was anything to choose. This is how that property is
+    /// restored.
+    pub fn missing_from(existing: &str) -> Vec<String> {
+        let have: Vec<&str> = keys_in(existing);
+        blocks()
+            .into_iter()
+            .flat_map(|(_, keys)| keys)
+            .filter(|k| !have.contains(&k.as_str()))
+            .collect()
+    }
+
+    /// The text to append to `existing` so it lists every setting again, or
+    /// `None` when it already does.
+    ///
+    /// Each missing key is carried across **with the comment that explains it**,
+    /// because a bare `panel.opacity = 100` appearing in someone's file is not
+    /// discoverability, it is a puzzle.
+    pub fn append_for(existing: &str) -> Option<String> {
+        let have = keys_in(existing);
+        let mut out = String::new();
+
+        for (comment, keys) in blocks() {
+            // Only the absent keys. A block can hold several -- appending the
+            // whole block would duplicate the ones already there, and a later
+            // duplicate wins in `parse`, so it would quietly overwrite an edit
+            // with the default. That is the opposite of the intent.
+            let wanted: Vec<&String> = keys.iter().filter(|k| !have.contains(&k.as_str())).collect();
+            if wanted.is_empty() {
+                continue;
+            }
+            out.push('\n');
+            out.push_str(&comment);
+            for k in wanted {
+                if let Some(line) = default_line_for(k) {
+                    out.push_str(&line);
+                    out.push('\n');
+                }
+            }
+        }
+        (!out.is_empty()).then(|| {
+            format!(
+                "\n# ---- added by Dropkick: settings that did not exist when this\n\
+                 # ---- file was written. Values shown are the defaults.\n{out}"
+            )
+        })
     }
 
     /// The file written on first run: every setting, at its default, with a
@@ -236,5 +336,104 @@ mod tests {
         let (c, unknown) = Config::parse(Config::default_file());
         assert_eq!(c, Config::default());
         assert!(unknown.is_empty(), "the shipped file must not contain a typo: {unknown:?}");
+    }
+}
+
+#[cfg(test)]
+mod append_tests {
+    use super::*;
+
+    /// A config from before several settings existed -- the real one on this
+    /// machine, dated before `generate.*` and `panel.opacity`.
+    const OLD: &str = "# Dropkick settings. Plain key = value; '#' starts a comment.
+
+# Post a desktop notification when a countdown finishes.
+timer.notify = true
+
+# Ask the notification server to play a sound with it.
+timer.sound = true
+
+timer.show_panel = true
+";
+
+    #[test]
+    fn an_old_file_is_told_what_it_is_missing() {
+        let missing = Config::missing_from(OLD);
+        assert!(missing.contains(&"panel.opacity".to_string()));
+        assert!(missing.contains(&"generate.length".to_string()));
+        assert!(!missing.contains(&"timer.notify".to_string()));
+    }
+
+    #[test]
+    fn the_default_file_is_missing_nothing() {
+        assert!(Config::missing_from(Config::default_file()).is_empty());
+        assert_eq!(Config::append_for(Config::default_file()), None);
+    }
+
+    #[test]
+    fn appending_produces_a_file_that_parses_clean() {
+        let add = Config::append_for(OLD).expect("something should be missing");
+        let combined = format!("{OLD}{add}");
+        let (_, unknown) = Config::parse(&combined);
+        assert!(unknown.is_empty(), "appended text must parse: {unknown:?}");
+    }
+
+    #[test]
+    fn appending_preserves_the_users_own_edits() {
+        // The old file sets timer.show_panel = true, which is not the default.
+        // Appending must not reintroduce the key and quietly undo that.
+        let add = Config::append_for(OLD).unwrap();
+        let combined = format!("{OLD}{add}");
+        let (config, _) = Config::parse(&combined);
+        assert!(config.timer_show_panel, "the user's own value was overwritten");
+    }
+
+    #[test]
+    fn appending_only_adds_the_absent_keys_of_a_shared_block() {
+        // generate.* live under one comment. If a file has some of them, the
+        // present ones must not be repeated -- a later duplicate wins in
+        // `parse`, so repeating one would overwrite an edit with the default.
+        let partial = format!("{OLD}\ngenerate.length = 64\n");
+        let add = Config::append_for(&partial).unwrap();
+        assert!(!add.contains("generate.length"), "repeated a key that was present");
+        assert!(add.contains("generate.symbols"), "skipped a key that was absent");
+
+        let (config, _) = Config::parse(&format!("{partial}{add}"));
+        assert_eq!(config.generate_length, 64, "the edited value did not survive");
+    }
+
+    #[test]
+    fn appending_is_idempotent() {
+        let once = format!("{}{}", OLD, Config::append_for(OLD).unwrap());
+        assert_eq!(Config::append_for(&once), None, "a second pass would duplicate keys");
+    }
+
+    #[test]
+    fn every_appended_key_arrives_with_its_explanation() {
+        // A bare `panel.opacity = 100` turning up in someone's file is a
+        // puzzle, not discoverability.
+        let add = Config::append_for(OLD).unwrap();
+        for key in Config::missing_from(OLD) {
+            let at = add.find(&key).expect("key should be present");
+            let before = &add[..at];
+            let last_block = before.rsplit("\n\n").next().unwrap_or("");
+            assert!(last_block.contains('#'), "{key} arrived with no comment");
+        }
+    }
+
+    #[test]
+    fn a_commented_out_key_still_counts_as_absent() {
+        // Someone who commented a setting out chose the default deliberately,
+        // but the file no longer lists it as an option, so offer it again.
+        let commented = "# panel.opacity = 50\n";
+        assert!(Config::missing_from(commented).contains(&"panel.opacity".to_string()));
+    }
+
+    #[test]
+    fn an_empty_file_gets_everything() {
+        let missing = Config::missing_from("");
+        let total = Config::missing_from(Config::default_file()).len();
+        assert_eq!(total, 0);
+        assert!(missing.len() >= 10, "got {}", missing.len());
     }
 }
