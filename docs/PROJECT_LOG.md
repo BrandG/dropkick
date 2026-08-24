@@ -1714,6 +1714,56 @@ exits before settings are ever loaded**, so it proved nothing. The seam now has
 tests that construct `Settings` against a temp path directly, plus a real run
 that took the user's own file from 4 keys to 10.
 
+## A DROP SHADOW — 2026-08-24 (user)
+
+The last of the visual work, and the only piece that needed the surface to grow.
+
+`SURFACE_W`/`SURFACE_H` add 24px left, right and below. **Nothing above**: the
+panel is anchored to the top of the screen, so a shadow there falls off the
+edge — the same reason the top corners are square.
+
+### Panel coordinates survived
+
+`Canvas` gained `stride`, `ox` and `oy`, and a `view()` that returns a window
+onto part of a buffer with its own origin. The panel is drawn into a view offset
+by the shadow width, so every drawing function still works in panel coordinates
+and still centres on `canvas.w`. **Nothing below `draw_surface` knows the shadow
+exists**, which is what kept this from touching seven drawing functions.
+
+### The input region is the part that matters
+
+A bigger surface means a bigger area that swallows pointer events. Without
+`set_input_region` the shadow would be a translucent gutter that eats clicks
+meant for the window behind — worse than having no shadow. The region is the
+panel rectangle.
+
+Left square at the corners, deliberately: a pointer landing in the ten pixels a
+rounded corner cuts away is not worth a second region, and the alternative is
+clicks falling through part of a panel that looks solid.
+
+**Note for later:** this is also the first `set_input_region` in the project, so
+the panel used to swallow clicks at its own edges too, and now does not.
+
+### Quadratic falloff
+
+Linear reads as a grey band with a hard outer edge — the eye is much better at
+finding the end of a gradient than its middle. Tests assert the alpha is
+monotonic outward and reaches zero before the surface edge, and that the shadow
+follows the *rounded* bottom corners rather than a square outline.
+
+### And a flaw this exposed in the screenshots
+
+`--shot` wrote PPM, which has no alpha. Once the corners were cut, a transparent
+pixel was being written as premultiplied black — so **the committed screenshots
+had two black notches at the bottom, added when the corners shipped, and nobody
+looked.** The shadow would have made it worse.
+
+Shots are now `.pam`, which has an alpha channel, converted with `pamtopng`.
+All six committed images were regenerated and carry real transparency.
+
+That is the second time in this project that generating an image counted as
+reviewing it. It does not.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

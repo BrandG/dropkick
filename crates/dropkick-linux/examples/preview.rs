@@ -10,7 +10,8 @@
 //! cargo run --release --example preview -- 200 /tmp/translucent.ppm
 //! ```
 fn main() {
-    let (w, h) = (dropkick_linux::render::WIDTH as i32, dropkick_linux::render::HEIGHT as i32);
+    let (w, h) =
+        (dropkick_linux::render::SURFACE_W as i32, dropkick_linux::render::SURFACE_H as i32);
     let opacity: u8 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(255);
     let mut text = dropkick_linux::font::TextRenderer::new(16.0).unwrap();
     let mut big = dropkick_linux::font::TextRenderer::new(58.0).unwrap();
@@ -21,8 +22,8 @@ fn main() {
 
     let mut buf = vec![0u8; (w * h * 4) as usize];
     {
-        let mut canvas = dropkick_linux::font::Canvas { buf: &mut buf, w, h };
-        dropkick_linux::render::draw(&app, &mut text, &mut big, 0, &mut canvas, opacity);
+        let mut canvas = dropkick_linux::font::Canvas::new(&mut buf, w, h);
+        dropkick_linux::render::draw_surface(&app, &mut text, &mut big, 0, &mut canvas, opacity);
     }
     // Composite over a checker so both transparency and the corners show.
     let m = 40;

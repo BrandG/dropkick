@@ -17,6 +17,20 @@ use crate::font::{Canvas, TextRenderer};
 pub const WIDTH: u32 = 940;
 pub const HEIGHT: u32 = 460;
 
+/// How far the shadow reaches beyond the panel.
+///
+/// Left, right and below only. The panel is anchored to the top of the screen
+/// with no margin, so a shadow above it would fall off the edge -- the same
+/// reason the top corners are square.
+pub const SHADOW: u32 = 24;
+
+/// The surface Dropkick actually asks for: the panel plus room for its shadow.
+pub const SURFACE_W: u32 = WIDTH + SHADOW * 2;
+pub const SURFACE_H: u32 = HEIGHT + SHADOW;
+
+/// Darkest the shadow gets, right against the panel edge.
+const SHADOW_ALPHA: f32 = 115.0;
+
 const TAB_H: i32 = 40;
 const HINT_H: i32 = 30;
 const PAD: f32 = 18.0;
@@ -83,6 +97,85 @@ const ROUND_TOP: bool = false;
 /// `now_ms` is passed rather than kept on `App`: a clock stored as state is a
 /// clock that can be stale, and the timer readout is the one thing here that
 /// must never be.
+/// Paint the whole surface: the shadow, then the panel inside it.
+///
+/// The panel is drawn into a *view* of this canvas offset by [`SHADOW`], so
+/// every drawing function still works in panel coordinates and still centres on
+/// `canvas.w`. Nothing below this function knows the shadow exists.
+pub fn draw_surface(
+    app: &App,
+    text: &mut TextRenderer,
+    big: &mut TextRenderer,
+    now_ms: u64,
+    canvas: &mut Canvas,
+    opacity: u8,
+) {
+    canvas.clear();
+    draw_shadow(canvas);
+    {
+        let mut panel = canvas.view(SHADOW as i32, 0, WIDTH as i32, HEIGHT as i32);
+        draw(app, text, big, now_ms, &mut panel, 255);
+    }
+    // Applied over the whole surface so the shadow fades with the panel. A
+    // solid shadow around a see-through panel looks like a rendering fault.
+    apply_opacity(canvas, opacity);
+}
+
+/// A soft edge around the panel, so it reads as sitting above the desktop
+/// rather than being cut into it.
+///
+/// Quadratic falloff: linear looks like a grey band with a hard outer edge,
+/// because the eye is far better at spotting the end of a gradient than its
+/// middle.
+fn draw_shadow(canvas: &mut Canvas) {
+    let m = SHADOW as f32;
+    let (x0, y0) = (SHADOW as i32, 0i32);
+    let (x1, y1) = (x0 + WIDTH as i32 - 1, HEIGHT as i32 - 1);
+    let r = RADIUS as f32;
+
+    for y in 0..canvas.h {
+        for x in 0..canvas.w {
+            // Inside the panel proper: leave it, the panel paints there.
+            if x >= x0 && x <= x1 && y <= y1 {
+                let bottom_corner = (y as f32) > y1 as f32 - r
+                    && ((x as f32) < x0 as f32 + r || (x as f32) > x1 as f32 - r);
+                if !bottom_corner {
+                    continue;
+                }
+            }
+            let d = distance_outside_panel(x as f32, y as f32, x0 as f32, y0 as f32, x1 as f32, y1 as f32, r);
+            if d <= 0.0 || d > m {
+                continue;
+            }
+            let t = 1.0 - d / m;
+            let a = (SHADOW_ALPHA * t * t).round() as u8;
+            if a > 0 {
+                canvas.put_alpha(x, y, 0x00_0000, a);
+            }
+        }
+    }
+}
+
+/// Distance from a point to the panel's outline, zero or less when inside.
+///
+/// The panel is a rectangle with two rounded bottom corners, so the bottom
+/// corners measure to the arc and everything else measures to the box.
+fn distance_outside_panel(x: f32, y: f32, x0: f32, y0: f32, x1: f32, y1: f32, r: f32) -> f32 {
+    if y > y1 - r {
+        if x < x0 + r {
+            let (cx, cy) = (x0 + r, y1 - r);
+            return ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r;
+        }
+        if x > x1 - r {
+            let (cx, cy) = (x1 - r, y1 - r);
+            return ((x - cx).powi(2) + (y - cy).powi(2)).sqrt() - r;
+        }
+    }
+    let dx = (x0 - x).max(x - x1).max(0.0);
+    let dy = (y0 - y).max(y - y1).max(0.0);
+    (dx * dx + dy * dy).sqrt()
+}
+
 /// `opacity` is 0..=255 and applies to the whole panel, background and text
 /// alike, which is what "make the window see-through" means everywhere else.
 pub fn draw(
@@ -878,7 +971,7 @@ mod tests {
         let (w, h) = (WIDTH as i32, HEIGHT as i32);
         let mut buf = vec![0u8; (w * h * 4) as usize];
         {
-            let mut canvas = Canvas { buf: &mut buf, w, h };
+            let mut canvas = Canvas::new(&mut buf, w, h);
             canvas.fill(BG);
             draw_border(&mut canvas);
             round_corners(&mut canvas);
@@ -931,6 +1024,81 @@ mod tests {
         ToolId::Generate,
         ToolId::Color,
     ];
+
+    fn surface() -> (Vec<u8>, i32, i32) {
+        let (w, h) = (SURFACE_W as i32, SURFACE_H as i32);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        {
+            let mut canvas = Canvas::new(&mut buf, w, h);
+            canvas.clear();
+            draw_shadow(&mut canvas);
+        }
+        (buf, w, h)
+    }
+
+    #[test]
+    fn the_shadow_fades_out_before_the_surface_edge() {
+        let (buf, w, h) = surface();
+        // Hard against the left edge of the surface there should be nothing
+        // left, or the shadow would end in a visible straight line.
+        assert_eq!(alpha_at(&buf, w, 0, h / 2), 0, "shadow reaches the surface edge");
+        assert_eq!(alpha_at(&buf, w, w - 1, h / 2), 0);
+        assert_eq!(alpha_at(&buf, w, w / 2, h - 1), 0, "shadow reaches the bottom edge");
+    }
+
+    #[test]
+    fn the_shadow_is_darkest_against_the_panel() {
+        let (buf, w, h) = surface();
+        let y = h / 2;
+        let near = alpha_at(&buf, w, SHADOW as i32 - 1, y);
+        let mid = alpha_at(&buf, w, SHADOW as i32 / 2, y);
+        let far = alpha_at(&buf, w, 1, y);
+        assert!(near > mid && mid > far, "not monotonic: {near} {mid} {far}");
+        assert!(near > 60, "barely visible at the panel edge: {near}");
+    }
+
+    #[test]
+    fn there_is_no_shadow_above_the_panel() {
+        // Anchored to the top of the screen, so anything drawn above the panel
+        // falls off the edge. The surface is not taller for nothing.
+        let (buf, w, _h) = surface();
+        assert_eq!(alpha_at(&buf, w, w / 2, 0), 0);
+        assert_eq!(SURFACE_H, HEIGHT + SHADOW, "surface is only extended downward");
+    }
+
+    #[test]
+    fn the_panel_area_is_left_for_the_panel() {
+        let (buf, w, _h) = surface();
+        // Well inside the panel, the shadow pass must not have painted.
+        assert_eq!(alpha_at(&buf, w, SHADOW as i32 + 100, 100), 0);
+    }
+
+    #[test]
+    fn the_shadow_follows_the_rounded_corner() {
+        // Diagonally outside a bottom corner should still be shadowed; if the
+        // corner were treated as square, this point would be inside the panel
+        // and left blank.
+        let (buf, w, _h) = surface();
+        let x = SHADOW as i32 + 2;
+        let y = HEIGHT as i32 - 3;
+        assert!(alpha_at(&buf, w, x, y) > 0, "no shadow under the cut corner");
+    }
+
+    #[test]
+    fn a_panel_view_draws_into_the_right_part_of_the_surface() {
+        // The whole reason Canvas gained views: panel coordinates must land
+        // offset inside the larger buffer, or everything is drawn 24px left.
+        let (w, h) = (SURFACE_W as i32, SURFACE_H as i32);
+        let mut buf = vec![0u8; (w * h * 4) as usize];
+        {
+            let mut canvas = Canvas::new(&mut buf, w, h);
+            canvas.clear();
+            let mut panel = canvas.view(SHADOW as i32, 0, WIDTH as i32, HEIGHT as i32);
+            panel.fill_rect(0, 0, 1, 1, 0xFF_FFFF);
+        }
+        assert_eq!(alpha_at(&buf, w, 0, 0), 0, "painted outside the view");
+        assert_eq!(alpha_at(&buf, w, SHADOW as i32, 0), 255, "view origin is wrong");
+    }
 
     #[test]
     fn every_tool_has_its_own_accent() {

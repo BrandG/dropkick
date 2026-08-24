@@ -28,7 +28,7 @@
 use dropkick_core::app::{App, Request, Response};
 use dropkick_core::key::{Key as DkKey, KeyPress, Mods};
 use dropkick_linux::font::{Canvas, TextRenderer};
-use dropkick_linux::render::{self, HEIGHT, WIDTH};
+use dropkick_linux::render::{self, HEIGHT, SHADOW, SURFACE_H, SURFACE_W, WIDTH};
 use dropkick_linux::ipc;
 use dropkick_linux::{storage, tz};
 
@@ -56,7 +56,7 @@ use smithay_client_toolkit::reexports::protocols_wlr::data_control::v1::client::
     zwlr_data_control_source_v1::{self, ZwlrDataControlSourceV1},
 };
 use smithay_client_toolkit::{
-    compositor::{CompositorHandler, CompositorState, FrameCallbackData},
+    compositor::{CompositorHandler, CompositorState, FrameCallbackData, Region},
     delegate_registry,
     output::{OutputHandler, OutputState},
     registry::{ProvidesRegistryState, RegistryState},
@@ -271,8 +271,25 @@ impl Dropkick {
         }
 
         if let Some(layer) = self.layer.as_ref() {
-            layer.set_size(WIDTH, HEIGHT);
+            layer.set_size(SURFACE_W, SURFACE_H);
             layer.set_anchor(Anchor::TOP);
+
+            // The surface is bigger than the panel now, to make room for the
+            // shadow. Without this, that extra band would swallow clicks meant
+            // for whatever is behind it -- a translucent gutter that eats the
+            // pointer is worse than having no shadow at all.
+            //
+            // The region is the panel rectangle only. Corners are left square
+            // here: a pointer landing in the ten pixels a rounded corner cuts
+            // away is not worth a second region, and the alternative is
+            // clicks passing through a part of the panel that looks solid.
+            match Region::new(&self.compositor) {
+                Ok(region) => {
+                    region.add(SHADOW as i32, 0, WIDTH as i32, HEIGHT as i32);
+                    layer.wl_surface().set_input_region(Some(region.wl_region()));
+                }
+                Err(e) => eprintln!("dropkickd: no input region, the shadow will eat clicks: {e}"),
+            }
             layer.set_keyboard_interactivity(interactivity);
             layer.commit();
         }
@@ -372,10 +389,10 @@ impl Dropkick {
             .create_buffer(width as i32, height as i32, stride, wl_shm::Format::Argb8888)
             .expect("create buffer");
 
-        let mut canvas = Canvas { buf: pixels, w: width as i32, h: height as i32 };
+        let mut canvas = Canvas::new(pixels, width as i32, height as i32);
         let now = self.started.elapsed().as_millis() as u64;
         let opacity = (self.settings.config.panel_opacity.clamp(20, 100) * 255 / 100) as u8;
-        render::draw(&self.app, &mut self.text, &mut self.big, now, &mut canvas, opacity);
+        render::draw_surface(&self.app, &mut self.text, &mut self.big, now, &mut canvas, opacity);
 
         let Some(layer) = self.layer.as_ref() else { return };
         layer.wl_surface().damage_buffer(0, 0, width as i32, height as i32);
@@ -1432,13 +1449,15 @@ everywhere.";
     for (name, setup) in frames {
         let mut app = App::new();
         setup(&mut app);
-        let mut buf = vec![0u8; (WIDTH * HEIGHT * 4) as usize];
-        let mut canvas = Canvas { buf: &mut buf, w: WIDTH as i32, h: HEIGHT as i32 };
+        let mut buf = vec![0u8; (SURFACE_W * SURFACE_H * 4) as usize];
+        let mut canvas = Canvas::new(&mut buf, SURFACE_W as i32, SURFACE_H as i32);
         // Shots are rendered solid: an opacity setting would make every frame
         // depend on the machine's config file rather than on the code.
-        render::draw(&app, &mut text, &mut big, SHOT_NOW_MS, &mut canvas, 255);
-        let path = format!("{prefix}-{name}.ppm");
-        std::fs::write(&path, canvas.to_ppm())?;
+        render::draw_surface(&app, &mut text, &mut big, SHOT_NOW_MS, &mut canvas, 255);
+        // PAM, not PPM: the panel is no longer a rectangle and now casts a
+        // shadow, and PPM has no alpha to represent either. `pamtopng` keeps it.
+        let path = format!("{prefix}-{name}.pam");
+        std::fs::write(&path, canvas.to_pam())?;
         println!("wrote {path}");
     }
     Ok(())

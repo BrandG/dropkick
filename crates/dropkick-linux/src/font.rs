@@ -82,17 +82,59 @@ impl TextRenderer {
 }
 
 /// ARGB8888, little-endian in memory: [B, G, R, A].
+/// A drawable rectangle, which may be a window onto part of a larger buffer.
+///
+/// `w`/`h` are the *view's* size and every coordinate is relative to it, so
+/// drawing code that centres on `canvas.w` keeps working when the view is a
+/// panel sitting inside a bigger surface. `stride` is the real row length of
+/// the underlying buffer; `ox`/`oy` are where the view starts in it.
 pub struct Canvas<'a> {
     pub buf: &'a mut [u8],
     pub w: i32,
     pub h: i32,
+    pub stride: i32,
+    pub ox: i32,
+    pub oy: i32,
 }
 
-impl Canvas<'_> {
+impl<'a> Canvas<'a> {
+    /// A canvas covering a whole buffer.
+    pub fn new(buf: &'a mut [u8], w: i32, h: i32) -> Canvas<'a> {
+        Canvas { buf, w, h, stride: w, ox: 0, oy: 0 }
+    }
+
+    /// A window onto part of this canvas. Coordinates inside it start at 0.
+    pub fn view(&mut self, ox: i32, oy: i32, w: i32, h: i32) -> Canvas<'_> {
+        Canvas {
+            stride: self.stride,
+            ox: self.ox + ox,
+            oy: self.oy + oy,
+            w,
+            h,
+            buf: self.buf,
+        }
+    }
+
+    #[inline]
+    fn index(&self, x: i32, y: i32) -> usize {
+        (((self.oy + y) * self.stride + (self.ox + x)) * 4) as usize
+    }
+
     pub fn fill(&mut self, color: u32) {
-        let px = (0xFF00_0000u32 | color).to_le_bytes();
-        for chunk in self.buf.chunks_exact_mut(4) {
-            chunk.copy_from_slice(&px);
+        for row in 0..self.h {
+            for col in 0..self.w {
+                self.set(col, row, color);
+            }
+        }
+    }
+
+    /// Clear to fully transparent. Premultiplied, so that is all zeroes.
+    pub fn clear(&mut self) {
+        for row in 0..self.h {
+            for col in 0..self.w {
+                let i = self.index(col, row);
+                self.buf[i..i + 4].copy_from_slice(&[0, 0, 0, 0]);
+            }
         }
     }
 
@@ -110,7 +152,7 @@ impl Canvas<'_> {
         if x < 0 || y < 0 || x >= self.w || y >= self.h {
             return 0;
         }
-        let i = ((y * self.w + x) * 4) as usize;
+        let i = self.index(x, y);
         u32::from_le_bytes([self.buf[i], self.buf[i + 1], self.buf[i + 2], self.buf[i + 3]])
             & 0x00FF_FFFF
     }
@@ -133,7 +175,7 @@ impl Canvas<'_> {
             | (scale((color >> 16) & 0xFF) << 16)
             | (scale((color >> 8) & 0xFF) << 8)
             | scale(color & 0xFF);
-        let i = ((y * self.w + x) * 4) as usize;
+        let i = self.index(x, y);
         self.buf[i..i + 4].copy_from_slice(&out.to_le_bytes());
     }
 
@@ -142,7 +184,7 @@ impl Canvas<'_> {
         if x < 0 || y < 0 || x >= self.w || y >= self.h {
             return;
         }
-        let i = ((y * self.w + x) * 4) as usize;
+        let i = self.index(x, y);
         self.buf[i..i + 4].copy_from_slice(&(0xFF00_0000u32 | color).to_le_bytes());
     }
 
@@ -155,7 +197,7 @@ impl Canvas<'_> {
             self.set(x, y, color);
             return;
         }
-        let i = ((y * self.w + x) * 4) as usize;
+        let i = self.index(x, y);
         let a = alpha as u32;
         let inv = 255 - a;
         let (sr, sg, sb) = ((color >> 16) & 0xFF, (color >> 8) & 0xFF, color & 0xFF);
@@ -171,8 +213,37 @@ impl Canvas<'_> {
     /// Dump as binary PPM so a frame can be inspected without a compositor.
     pub fn to_ppm(&self) -> Vec<u8> {
         let mut out = format!("P6\n{} {}\n255\n", self.w, self.h).into_bytes();
-        for chunk in self.buf.chunks_exact(4) {
-            out.extend_from_slice(&[chunk[2], chunk[1], chunk[0]]);
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let i = self.index(x, y);
+                out.extend_from_slice(&[self.buf[i + 2], self.buf[i + 1], self.buf[i]]);
+            }
+        }
+        out
+    }
+
+    /// PAM, which unlike PPM has an alpha channel.
+    ///
+    /// Needed once the panel stopped being a rectangle: PPM drops alpha, so a
+    /// cut corner is written as premultiplied black and shows up as a notch.
+    /// The committed screenshots had two of those and nobody noticed.
+    /// `pamtopng` turns this into a PNG that keeps the transparency.
+    pub fn to_pam(&self) -> Vec<u8> {
+        let mut out = format!(
+            "P7\nWIDTH {}\nHEIGHT {}\nDEPTH 4\nMAXVAL 255\nTUPLTYPE RGB_ALPHA\nENDHDR\n",
+            self.w, self.h
+        )
+        .into_bytes();
+        for y in 0..self.h {
+            for x in 0..self.w {
+                let i = self.index(x, y);
+                let a = self.buf[i + 3] as u32;
+                // PAM wants straight alpha; the buffer is premultiplied.
+                let un = |c: u8| {
+                    (c as u32 * 255 + a / 2).checked_div(a).map_or(0, |v| v.min(255) as u8)
+                };
+                out.extend_from_slice(&[un(self.buf[i + 2]), un(self.buf[i + 1]), un(self.buf[i]), a as u8]);
+            }
         }
         out
     }

@@ -58,9 +58,13 @@ Renders every view to PPM by driving the real `App` through synthetic keys.
 Convert with `pnmtopng` and look at them. This is how the UI gets reviewed —
 use it rather than describing a screenshot in prose.
 
-**PPM has no alpha**, so `--shot` cannot show the rounded corners or
-`panel.opacity`; a transparent pixel is premultiplied to black and looks like a
-black pixel. For those, composite over a checkerboard instead:
+Shots are written as **`.pam`**, not PPM: the panel is no longer a rectangle and
+now casts a shadow, and PPM has no alpha to represent either. Convert with
+`pamtopng` to get a PNG that keeps the transparency. `pnmtopng` on a PPM writes
+cut corners as black notches, which is how the committed screenshots carried two
+of them for a while.
+
+To see it against something, composite over a checkerboard:
 
 ```
 cargo run --release --example preview -- 200 /tmp/dk.ppm
@@ -126,6 +130,12 @@ cannot leak one by forgetting.
 since the daemon started. Anything needing a real date uses `tz::today_local()`,
 which reads `/etc/localtime`. UTC is not good enough: local and UTC are on
 different days for several hours every evening in this timezone.
+
+**The surface is bigger than the panel.** `SURFACE_W`/`SURFACE_H` add room for
+the shadow — 24px left, right and below, none above, since the panel is docked
+to the top. Drawing code works in *panel* coordinates through `Canvas::view`,
+so it never knows. **An input region is set to the panel rectangle**; without it
+the shadow band swallows clicks meant for the window behind.
 
 **Never write a file in place.** `storage::write_atomic` writes a temp file
 beside the target and renames it over. The temp must be in the same directory
