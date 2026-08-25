@@ -207,6 +207,7 @@ yourself.
 ```
 ~/.local/share/dropkick/     things kept between sessions   (dir 0700, files 0600)
   calendar.txt               your entries, one per line, editable by hand
+  scratchpad.txt             exactly what you typed, nothing else
 $XDG_RUNTIME_DIR/dropkick/   things wiped when you log out  (tmpfs, private)
 ```
 

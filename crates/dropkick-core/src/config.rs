@@ -37,6 +37,12 @@ pub struct Config {
     /// Leave out characters that are easy to misread: l I 1 O 0.
     pub generate_exclude_ambiguous: bool,
 
+    /// Keep the Scratchpad's contents between runs.
+    ///
+    /// On, because a scratchpad that forgets what you wrote when the daemon
+    /// stops is a scratchpad you cannot trust with anything you care about.
+    pub scratchpad_persist: bool,
+
     /// How see-through the panel is, as a percentage. 100 is solid.
     ///
     /// Floored at 20 rather than 0: a panel you cannot see is one you cannot
@@ -58,6 +64,7 @@ impl Default for Config {
             generate_digits: true,
             generate_symbols: true,
             generate_exclude_ambiguous: false,
+            scratchpad_persist: true,
             panel_opacity: 100,
         }
     }
@@ -157,6 +164,7 @@ impl Config {
                 "generate.digits" => config.generate_digits = on,
                 "generate.symbols" => config.generate_symbols = on,
                 "generate.exclude_ambiguous" => config.generate_exclude_ambiguous = on,
+                "scratchpad.persist" => config.scratchpad_persist = on,
                 "panel.opacity" => match value.parse::<u32>() {
                     Ok(n) => config.panel_opacity = n.clamp(20, 100),
                     Err(_) => unknown.push(Unknown { line: i + 1, key: key.to_string() }),
@@ -249,6 +257,11 @@ generate.symbols = true
 # Leave out characters that are easy to misread when typing a password
 # somewhere else by hand: l I 1 O 0.
 generate.exclude_ambiguous = false
+
+# Keep what you type in the Scratchpad between runs. It is written to
+# ~/.local/share/dropkick/scratchpad.txt, readable only by you. Turn this off
+# and the Scratchpad forgets everything when the daemon stops.
+scratchpad.persist = true
 
 # How see-through the panel is, as a percentage. 100 is solid. Lower lets you
 # read what is behind it -- handy when you are copying something off the window

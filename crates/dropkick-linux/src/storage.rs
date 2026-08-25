@@ -39,6 +39,10 @@ pub fn calendar_path() -> Option<PathBuf> {
     Some(data_dir()?.join("calendar.txt"))
 }
 
+pub fn scratchpad_path() -> Option<PathBuf> {
+    Some(data_dir()?.join("scratchpad.txt"))
+}
+
 /// Create a directory if needed and make sure it is `0700`.
 ///
 /// The mode is applied whether or not this call created it: a directory left

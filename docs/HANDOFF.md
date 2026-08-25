@@ -20,7 +20,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 | key | tool | state |
 |---|---|---|
-| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators |
+| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators, persisted |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
 | `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
@@ -79,6 +79,7 @@ Other dev-only flags and env vars:
 DROPKICK_DEBUG=1           capture/notify logging: lengths only, never content
 DROPKICK_TRACE=1           tick and focus tracing
 DROPKICK_DEBUG_TIMER=3s    arm a countdown at startup, to test hidden behaviour
+DROPKICK_DEBUG_SCRATCHPAD=. seed the scratchpad, to test save-on-quit
 ```
 
 ## Traps

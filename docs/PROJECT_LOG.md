@@ -1801,6 +1801,56 @@ because it is a colour, not a darkening.
 `SHADOW`, `SHADOW_ALPHA` and `SHADOW_FALLOFF` are all constants if it wants
 tuning again.
 
+## THE SCRATCHPAD NEVER PERSISTED — 2026-08-25 (user)
+
+**Data loss.** The user was keeping notes in the Scratchpad, ran `dropkickctl
+quit`, and lost them. Unrecoverable: the buffer lived in the daemon's heap and
+nothing had ever written it anywhere.
+
+This was not a decision. `Per-tool persistence` in this file, locked by the user
+on 2026-08-15, says **Scratchpad | persists**. The storage layer was built on
+2026-08-22 for the Calendar, and the Scratchpad was simply never wired to it.
+`quit` saved the calendar and exited. Nothing in the README or the handoff said
+the Scratchpad was volatile, so there was no reason to doubt it.
+
+The user's own guess was that it might have been deliberate — a security choice.
+It was not, and saying so matters more than taking the excuse. **The security
+argument does exist and runs the other way:** a scratchpad written to disk at
+`0600` survives in backups and on a stolen laptop, and this project reserves
+encryption for pinned clipboard entries and things marked secret. So this is
+plaintext on disk, knowingly, which is why `scratchpad.persist` is a setting.
+
+### Saved by comparison, not by a dirty flag
+
+`saved_scratchpad` holds what was last written; after **any** key, the current
+text is compared against it and a save scheduled if they differ.
+
+A dirty flag would have been cheaper and would have been wrong. There are a
+dozen ways to change that buffer — insert, Enter, Backspace, `x`, `dd`, an
+operator over a motion, a visual delete, `u` — and a flag missed at any one of
+them loses work silently, which is the exact failure being fixed. Comparing the
+text cannot miss a path. It costs a string build per keystroke on a buffer
+measured in kilobytes.
+
+Triggers match the Calendar: ~2s after the last edit, on hide, and on quit.
+
+### Verified end to end, not just in tests
+
+The unit tests were not enough for this one. An isolated daemon was run against
+the real compositor with its own `XDG_DATA_HOME` and its own control socket:
+seeded, quit, and the file appeared at `0600` with the right bytes; then started
+again with no seed and reported `restored 66 bytes of scratchpad`.
+
+Two things that made that possible and are worth knowing:
+
+- **Overriding `XDG_RUNTIME_DIR` breaks Wayland**, because that is where its
+  socket lives. Set `WAYLAND_DISPLAY` to an absolute path instead, and the
+  runtime dir can be moved for the control socket alone.
+- The control socket path has to stay under `SUN_LEN`, about 108 characters. A
+  scratch directory deep in `/tmp` blew it.
+
+`DROPKICK_DEBUG_SCRATCHPAD` seeds the buffer at startup for exactly this test.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

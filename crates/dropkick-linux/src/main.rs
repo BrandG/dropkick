@@ -143,6 +143,16 @@ struct Dropkick {
     tick_token: Option<RegistrationToken>,
     /// The pending debounced calendar write, if one is armed.
     calendar_token: Option<RegistrationToken>,
+    /// The pending debounced scratchpad write.
+    scratchpad_token: Option<RegistrationToken>,
+    /// What was last written to disk.
+    ///
+    /// The scratchpad is saved by comparing against this rather than by a dirty
+    /// flag set at each mutation site. There are a dozen ways to change the
+    /// buffer -- insert, backspace, `x`, `dd`, an operator over a motion, a
+    /// visual delete, undo -- and a flag missed at any one of them loses work
+    /// silently. Comparing the text cannot miss one.
+    saved_scratchpad: String,
     /// Where the eyedropper thread posts its answer.
     picked: channel::Sender<Picked>,
     /// True between asking for exclusive focus and actually getting it.
@@ -337,6 +347,7 @@ impl Dropkick {
         // user considers themselves done, so waiting out the debounce would be
         // gambling with work they think is already put away.
         self.save_calendar_now();
+        self.save_scratchpad_now();
         match self.strategy {
             Strategy::Recreate => {
                 // Dropping destroys zwlr_layer_surface_v1 and its wl_surface.
@@ -589,6 +600,54 @@ impl Dropkick {
         }
     }
 
+    /// Read the scratchpad off disk at startup.
+    fn load_scratchpad(&mut self) {
+        if !self.settings.config.scratchpad_persist {
+            return;
+        }
+        let Some(path) = storage::scratchpad_path() else { return };
+        if let Some(text) = storage::read(&path) {
+            self.app.scratchpad.load(&text);
+            self.saved_scratchpad = self.app.scratchpad.text();
+            println!("dropkickd: restored {} bytes of scratchpad", text.len());
+        }
+    }
+
+    /// Write the scratchpad now, if it differs from what is on disk.
+    fn save_scratchpad_now(&mut self) {
+        if !self.settings.config.scratchpad_persist {
+            return;
+        }
+        let current = self.app.scratchpad.text();
+        if current == self.saved_scratchpad {
+            return;
+        }
+        let Some(path) = storage::scratchpad_path() else { return };
+        match storage::write_atomic(&path, &current) {
+            Ok(()) => self.saved_scratchpad = current,
+            // Leave `saved_scratchpad` alone so the next trigger tries again.
+            Err(e) => eprintln!("dropkickd: could not save the scratchpad: {e}"),
+        }
+        self.scratchpad_token = None;
+    }
+
+    /// Save ~2s after the last edit, like the calendar.
+    fn schedule_scratchpad_save(&mut self) {
+        if let Some(tok) = self.scratchpad_token.take() {
+            self.handle.remove(tok);
+        }
+        self.scratchpad_token = self
+            .handle
+            .insert_source(
+                Timer::from_duration(Duration::from_secs(2)),
+                |_, _, state: &mut Dropkick| {
+                    state.save_scratchpad_now();
+                    TimeoutAction::Drop
+                },
+            )
+            .ok();
+    }
+
     /// Write the calendar now, if it has unsaved changes.
     fn save_calendar_now(&mut self) {
         if !self.app.calendar.dirty {
@@ -779,6 +838,12 @@ impl Dropkick {
         let now = self.started.elapsed().as_millis() as u64;
         let response = self.app.on_key(press, now);
         self.drain_requests(qh);
+        // Checked here rather than raised as a Request: the comparison is the
+        // detection, and it has to happen after *any* key, not only the ones a
+        // tool thought were edits.
+        if self.app.scratchpad.text() != self.saved_scratchpad {
+            self.schedule_scratchpad_save();
+        }
         self.ensure_ticking();
         match response {
             Response::Redraw => self.draw(qh),
@@ -920,6 +985,9 @@ fn main() {
                     ipc::Cmd::Toggle => state.toggle(),
                     ipc::Cmd::Quit => {
                         state.save_calendar_now();
+                        // This is the one that lost a set of notes: quit used
+                        // to save the calendar and nothing else.
+                        state.save_scratchpad_now();
                         state.exit = true;
                     }
                 }
@@ -991,6 +1059,8 @@ fn main() {
         big,
         tick_token: None,
         calendar_token: None,
+        scratchpad_token: None,
+        saved_scratchpad: String::new(),
         picked: picked_tx,
         grabbed_exclusive: false,
         mods: Mods::default(),
@@ -1029,8 +1099,17 @@ fn main() {
         }
     }
 
-    // Read the calendar off disk before the first summon can show it.
+    // Read the calendar and scratchpad off disk before the first summon.
     state.load_calendar();
+    state.load_scratchpad();
+
+    // Dev-only: seed the scratchpad, so the save-on-quit path can be exercised
+    // without a compositor and without typing. This is the path that lost a
+    // set of notes; it is worth being able to test end to end.
+    if let Ok(seed) = std::env::var("DROPKICK_DEBUG_SCRATCHPAD") {
+        state.app.scratchpad.load(&seed);
+        println!("dropkickd: seeded scratchpad with {} bytes", seed.len());
+    }
 
     // Seed the generator's pool now rather than on first use, so the first
     // password costs no file open at the moment someone is waiting for it.

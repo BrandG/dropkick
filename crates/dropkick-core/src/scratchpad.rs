@@ -112,6 +112,25 @@ impl Scratchpad {
         self.lines.join("\n")
     }
 
+    /// Replace the buffer with a file's contents.
+    ///
+    /// Undo history is dropped: there is nothing sensible to undo *to* from
+    /// text that was typed in a previous run, and offering an undo that jumps
+    /// to a blank buffer would be worse than offering none.
+    pub fn load(&mut self, text: &str) {
+        self.lines = text.lines().map(str::to_string).collect();
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.cx = 0;
+        self.cy = 0;
+        self.mode = Mode::Command;
+        self.anchor = None;
+        self.pending = None;
+        self.pending_g = false;
+        self.undo.clear();
+    }
+
     fn snapshot(&mut self) {
         self.undo.push(Snapshot {
             lines: self.lines.clone(),
@@ -643,6 +662,47 @@ mod tests {
         for c in s.chars() {
             n.on_key(KeyPress::ch(c));
         }
+    }
+
+    #[test]
+    fn text_survives_a_round_trip_through_a_file() {
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "call Frank");
+        n.on_key(KeyPress::plain(Key::Enter));
+        type_str(&mut n, "  indented, and trailing spaces   ");
+        let before = n.text();
+
+        let mut back = Scratchpad::new();
+        back.load(&before);
+        assert_eq!(back.text(), before, "what was typed is what comes back");
+    }
+
+    #[test]
+    fn loading_leaves_a_usable_buffer_whatever_the_file_held() {
+        for text in ["", "\n", "one\ntwo\n", "no trailing newline", "\n\n\n"] {
+            let mut n = Scratchpad::new();
+            n.load(text);
+            assert!(!n.lines.is_empty(), "{text:?} produced an empty buffer");
+            assert_eq!(n.mode, Mode::Command);
+            assert_eq!((n.cx, n.cy), (0, 0));
+            // And it must be safe to type into immediately.
+            n.on_key(KeyPress::ch('i'));
+            n.on_key(KeyPress::ch('x'));
+        }
+    }
+
+    #[test]
+    fn loading_drops_undo_history() {
+        // Undoing to a blank buffer you never saw would be worse than having
+        // no undo at all.
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "typed this run");
+        n.leave_one_level();
+        n.load("from the file");
+        assert!(!n.undo(), "undo reached back past the load");
+        assert_eq!(n.text(), "from the file");
     }
 
     #[test]
