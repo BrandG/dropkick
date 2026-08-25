@@ -22,14 +22,28 @@ pub const HEIGHT: u32 = 460;
 /// Left, right and below only. The panel is anchored to the top of the screen
 /// with no margin, so a shadow above it would fall off the edge -- the same
 /// reason the top corners are square.
-pub const SHADOW: u32 = 24;
+pub const SHADOW: u32 = 32;
 
 /// The surface Dropkick actually asks for: the panel plus room for its shadow.
 pub const SURFACE_W: u32 = WIDTH + SHADOW * 2;
 pub const SURFACE_H: u32 = HEIGHT + SHADOW;
 
 /// Darkest the shadow gets, right against the panel edge.
-const SHADOW_ALPHA: f32 = 115.0;
+const SHADOW_ALPHA: f32 = 150.0;
+
+/// How quickly the shadow gives up as it moves away from the panel.
+///
+/// Was 2.0, and that was wrong: a square falloff puts nearly all of the shadow
+/// in the first third of the margin, so past about 12px it was under 10% black
+/// and simply not visible. 1.5 keeps the outer edge soft -- which is why the
+/// falloff is curved at all -- while leaving something to see further out.
+///
+/// Worth knowing when tuning: **a black shadow on a dark desktop has very
+/// little to work with.** Against a mid-grey window, 40% black moves a channel
+/// by about 18 levels; against a light one it moves it by nearly 100. There is
+/// no value here that makes it strong on a dark background without making it a
+/// smear on a light one.
+const SHADOW_FALLOFF: f32 = 1.5;
 
 const TAB_H: i32 = 40;
 const HINT_H: i32 = 30;
@@ -148,7 +162,7 @@ fn draw_shadow(canvas: &mut Canvas) {
                 continue;
             }
             let t = 1.0 - d / m;
-            let a = (SHADOW_ALPHA * t * t).round() as u8;
+            let a = (SHADOW_ALPHA * t.powf(SHADOW_FALLOFF)).round() as u8;
             if a > 0 {
                 canvas.put_alpha(x, y, 0x00_0000, a);
             }

@@ -1764,6 +1764,43 @@ All six committed images were regenerated and carry real transparency.
 That is the second time in this project that generating an image counted as
 reviewing it. It does not.
 
+### TOO SUBTLE — measured and widened (user, 2026-08-25)
+
+"Very, very subtle, but I can kinda see it." Measuring the alpha profile said
+why: with a **square** falloff over 24px, almost the whole shadow sat in the
+first third of the margin.
+
+```
+        0px   3    6    9   12   15   18   21
+was    42%  31%  23%  15%   9%   5%   2%   0%
+now    56%  49%  43%  36%  30%  24%  19%  14%     (32px, exponent 1.5)
+```
+
+The outer edge is still soft, which is the only reason the falloff is curved at
+all — but there is now something to see at 16px out rather than 3% of nothing.
+
+**The rest is not fixable by tuning, and is worth writing down.** A black shadow
+works by darkening what is behind it, and there is very little to darken on a
+dark desktop. The same 56% shadow moves a channel by:
+
+| behind it | channel moves by |
+|---|---|
+| dark desktop (46) | 26 |
+| mid grey (128) | 72 |
+| light desktop (226) | 127 |
+
+Five times the effect on a light background. Rendered over both at once, the
+shadow is obvious on the light half and nearly invisible on the dark half —
+same pixels, same frame. No value of `SHADOW_ALPHA` fixes the dark case without
+making the light one a smear.
+
+Which is why **the border is the thing that actually separates the panel**, and
+the shadow is depth on top of it. The border works against any background
+because it is a colour, not a darkening.
+
+`SHADOW`, `SHADOW_ALPHA` and `SHADOW_FALLOFF` are all constants if it wants
+tuning again.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough
