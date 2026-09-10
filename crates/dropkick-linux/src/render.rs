@@ -5,6 +5,7 @@
 //! lets everyone else ignore it.
 
 use dropkick_core::app::{App, ToolId, TOOLS};
+use dropkick_core::help;
 use dropkick_core::clipboard::Mode as ClipMode;
 use dropkick_core::scratchpad::Mode;
 use dropkick_core::timer::{format_duration, Mode as TimerMode};
@@ -206,6 +207,16 @@ pub fn draw(
 
     let content_top = TAB_H + 1;
     let content_bottom = canvas.h - HINT_H;
+    if app.help {
+        // Over the content, not over the panel. The tab bar stays lit so you
+        // can see whose keys you are reading, and alt+h/l pages through them.
+        draw_help(app, text, canvas, content_top, content_bottom);
+        draw_hints(app, text, canvas);
+        draw_border(canvas);
+        round_corners(canvas);
+        apply_opacity(canvas, opacity);
+        return;
+    }
     match app.active {
         ToolId::Calculator => draw_calculator(app, text, canvas, content_top, content_bottom),
         ToolId::Scratchpad => draw_scratchpad(app, text, canvas, content_top, content_bottom),
@@ -594,6 +605,62 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The help page: the active tool's keys on the left, the ones that work
+/// everywhere on the right.
+///
+/// Two columns rather than one long list, because the whole reason this is an
+/// overlay and not a tab is that it fits on one screen. A help page that has
+/// to be scrolled needs navigation keys, and those keys then need explaining.
+fn draw_help(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, bottom: i32) {
+    let lh = text.line_height();
+    let adv = text.advance();
+    let tool = app.active_tool();
+
+    // Where the description starts within a column, in characters. The widest
+    // key string decides it, so nothing collides and the descriptions line up.
+    let column = |rows: &[help::Row]| {
+        rows.iter().map(|r| r.keys.chars().count()).max().unwrap_or(0) as f32 + 2.0
+    };
+
+    let left_x = PAD;
+    let right_x = (canvas.w / 2) as f32 + PAD;
+    let rows = help::rows(app.active, app.color.eyedropper);
+
+    let draw_column =
+        |text: &mut TextRenderer, canvas: &mut Canvas, x, title: &str, rows: &[help::Row], tint| {
+            text.draw(canvas, x, top as f32 + lh * HELP_TITLE, title, tint);
+            let gap = adv * column(rows);
+            for (i, r) in rows.iter().enumerate() {
+                let y = help_row_y(lh, top, i);
+                // A row with no keys is a note about the tool rather than a
+                // key, so it sits in the description column on its own.
+                text.draw(canvas, x, y, r.keys, FG);
+                text.draw(canvas, x + gap, y, r.what, DIM);
+            }
+        };
+
+    draw_column(text, canvas, left_x, &tool.name.to_uppercase(), rows, accent(app.active));
+    draw_column(text, canvas, right_x, "EVERYWHERE", help::GLOBAL, DIM);
+
+    // A hairline between the columns, so the eye does not read across.
+    let mid = canvas.w / 2 + PAD as i32 / 2;
+    canvas.fill_rect(mid, top + (lh * 1.2) as i32, 1, bottom - top - (lh * 2.0) as i32, RULE);
+}
+
+/// The column heading, in line-heights below the top of the content area.
+const HELP_TITLE: f32 = 1.2;
+/// The first row, and the step between them. Tight: the Scratchpad has
+/// thirteen rows and 389px of panel to put them in, and the alternative to
+/// fitting is a page that scrolls.
+const HELP_FIRST: f32 = 2.6;
+const HELP_STEP: f32 = 1.1;
+
+/// Baseline of row `i`. Shared with the test that checks the longest table
+/// fits, so the check cannot drift from the drawing.
+fn help_row_y(lh: f32, top: i32, i: usize) -> f32 {
+    top as f32 + lh * HELP_FIRST + lh * HELP_STEP * i as f32
+}
+
 /// Said under the opening swatch, which nobody asked for and which would
 /// otherwise look like an answer to a question they do not remember asking.
 ///
@@ -1056,6 +1123,71 @@ mod tests {
             60.0 * ((r - g) / d + 4.0)
         };
         (h + 360.0) % 360.0
+    }
+
+    /// The help page fits on one screen or it is not a help page: it has no
+    /// scrolling and no paging keys, on purpose, because those keys would then
+    /// need explaining. Every tool's table has to fit, and the check uses the
+    /// same geometry the drawing does.
+    #[test]
+    fn every_help_page_fits_on_one_screen() {
+        let text = match TextRenderer::new(16.0) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let lh = text.line_height();
+        let (top, bottom) = (TAB_H + 1, HEIGHT as i32 - HINT_H);
+        for tool in ALL_TOOLS {
+            for eyedropper in [true, false] {
+                let rows = help::rows(tool, eyedropper);
+                let last = help_row_y(lh, top, rows.len() - 1);
+                // A baseline, so allow for what hangs below it.
+                let floor = bottom as f32 - lh * 0.4;
+                assert!(
+                    last <= floor,
+                    "{tool:?} help is {} rows, last baseline {last} past {floor}",
+                    rows.len()
+                );
+            }
+        }
+        // And the global column, which is drawn beside every one of them.
+        let last = help_row_y(lh, top, help::GLOBAL.len() - 1);
+        assert!(last <= bottom as f32 - lh * 0.4);
+    }
+
+    /// The two columns must not run into each other. The left one is as wide
+    /// as its widest key string plus its longest description, and that is data
+    /// in `help.rs` that can grow without anyone re-rendering the page.
+    #[test]
+    fn the_help_columns_do_not_collide() {
+        let text = match TextRenderer::new(16.0) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let adv = text.advance();
+        let right_x = (WIDTH / 2) as f32 + PAD;
+        for tool in ALL_TOOLS {
+            for eyedropper in [true, false] {
+                let rows = help::rows(tool, eyedropper);
+                let keys = rows.iter().map(|r| r.keys.chars().count()).max().unwrap_or(0);
+                let gap = adv * (keys as f32 + 2.0);
+                for r in rows {
+                    let end = PAD + gap + text.width_of(r.what);
+                    assert!(
+                        end < right_x,
+                        "{tool:?} row `{}` reaches {end}, past the second column at {right_x}",
+                        r.keys
+                    );
+                }
+            }
+        }
+        // The right column has the panel's edge to worry about instead.
+        let keys = help::GLOBAL.iter().map(|r| r.keys.chars().count()).max().unwrap_or(0);
+        let gap = adv * (keys as f32 + 2.0);
+        for r in help::GLOBAL {
+            let end = right_x + gap + text.width_of(r.what);
+            assert!(end < WIDTH as f32 - PAD, "global row `{}` runs off the panel", r.keys);
+        }
     }
 
     /// Both prompts have to fit between the margins. The calculator's error

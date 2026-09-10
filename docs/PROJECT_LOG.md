@@ -1946,6 +1946,80 @@ does nothing; the honest version is that copying what the panel is displaying
 must work. A key that refuses what is visibly on screen is worse than one that
 is not offered. The `current.is_none()` guard stays for the picker path.
 
+## A HELP OVERLAY ON ALT+/ — 2026-08-25 (user)
+
+Agreed long ago, built now. `Alt+/`, not `?`: `?` is Shift+/, and in insert
+mode that is a character someone is trying to type.
+
+### One page per tool, and the tab bar is the navigation
+
+The choice put to the user was per-tool or the whole manual at once. The whole
+manual does not fit in 460px, so it would need paging keys — and a help page
+whose navigation needs explaining has failed at the one job it has.
+
+Per-tool won, and then gave the other option away for free: **switching tools
+does not close the overlay.** `Alt+H` and `Alt+L` page through all seven, so
+the manual is browsable without a single key that exists only for the manual.
+The hint row says so while it is up.
+
+Two columns: the active tool's keys under its own accent, the keys that work
+everywhere beside them. A hairline between, so the eye does not read across.
+
+### It is a rung on the Esc ladder
+
+`Esc` closes it before the tool's own levels, because it is drawn over them.
+It must not dismiss — reading the keys should not cost you the panel.
+Double-`Esc` still dismisses from anywhere, which is the whole point of the
+double tap and must not be swallowed by the newest rung.
+
+**Every other key is eaten while it is up.** The tool underneath is not
+visible, and the Scratchpad is the one most likely to be behind it — letting
+`i` through would put someone in insert mode typing into a buffer they cannot
+see. "Any key closes it" was rejected for the opposite reason: an accidental
+keypress should not take away the thing you are reading.
+
+`on_summon` clears it, for the same reason resume never restores the last
+screen.
+
+### The honest part: help.rs is a claim, and claims go stale silently
+
+Nothing breaks when a help page becomes wrong. This one already had the
+failure in miniature — the hint row offered `Tab` for the eyedropper long after
+`Tab` began refusing — and a whole page of prose is a much bigger surface for
+it.
+
+So every row carries a **`probe`**: the plain characters it claims work. A test
+presses each one on a resting tool and requires it not to be `Ignored`. Where a
+claim cannot be pressed — a chord, `gg`, free text — the probe is empty, and
+the type says empty means *not mechanically checkable* rather than *nobody got
+around to it*.
+
+**It earned itself on the first run**, though not the way expected: it failed
+on `y` in Generate. The help was right and the *test* was wrong — a fresh
+`App` has a dry entropy pool, nothing has been generated, and there is nothing
+to copy. The fix was to give the probe a real tool to press keys on.
+
+What it cannot catch is the reverse: a key that exists and is undocumented. So
+adding a key means adding its row, and nothing will remind you.
+
+### Written from the handlers, not from memory
+
+Reading them to build the tables turned up several keys no hint row mentions —
+`n` as an alias for Tab in the Calendar, `i` and Enter as aliases for `a`,
+`Home`/`End` in the Clipboard, `=`/`_` and the arrows in Generate — and
+corrected one thing I had assumed: the Clipboard's `y` is an alias for Enter,
+so it pastes and dismisses rather than copying and staying.
+
+It also turned up two absences the user then asked for: **the Scratchpad has no
+`w`/`b` word motions and no `O`.** Logged for later, not built here.
+
+### Geometry is tested, not eyeballed
+
+The first render clipped `u undo` off the bottom. Two render tests now hold it:
+every tool's table fits between the tab bar and the hint row, and the two
+columns do not collide. Both use the same `help_row_y` the drawing does, so the
+check cannot drift from what is painted.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

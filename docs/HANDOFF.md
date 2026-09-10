@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-25
 
-**All seven tools built.** 357 tests, clippy clean at zero warnings.
+**All seven tools built.** 370 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -28,6 +28,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 | `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
 | `alt+u` | Color | built — hex/rgb/hsl/names; eyedropper written but **switched off**, COSMIC refuses it |
 | `alt+i/o/p` | — | deliberately unspent |
+| `alt+/` | Help | built — an overlay, not a tool; the active tool's keys plus the global ones |
 
 Summon is `Super+D`, bound in
 `~/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom`.
@@ -144,6 +145,14 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**`help.rs` is a claim about the other files, and claims go stale silently.**
+Every row carries a `probe`: the plain characters it says work, which a test
+presses and requires the tool to consume. It earned itself on the first run —
+it caught `y` in Generate, though the help was right and the test's tool had a
+dry entropy pool. Two render tests police the geometry: every table fits on one
+screen, and the columns do not collide. The probe cannot catch the *reverse* —
+a key that exists and is undocumented — so adding a key means adding its row.
+
 **Anything the panel displays, its keys must act on.** The Color tool opens on
 `color::SEED` so the tab is not blank, and `Ctrl+Y` copies it — a key that
 refuses what is visibly on screen is worse than one that is not offered. The
@@ -216,9 +225,11 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   taking one. Real work: the capture protocol, a full-screen picker surface, and
   cursor handling. Turning the existing portal path back on is one field
   (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
-- **Help overlay** — agreed, unbuilt. `Alt+/`, not `?`: `?` is Shift+/ and is
-  text in insert mode. Overlay, not a tab, so it costs no slot and drops into
-  the Esc ladder.
+- **`w`, `b` and `O` in the Scratchpad** (user, 2026-08-25) — word-forward,
+  word-back and open-a-line-*above*. All three are vi standards a vi user will
+  reach for and currently miss; `motion_for` is the one table `w`/`b` go in, so
+  they land in `dw`, `vw` and plain movement at once. Adding them means adding
+  their rows to `help.rs`, which the fit test will police.
 - **seccomp filter** denying `AF_INET`/`AF_INET6` — planned, would make the
   no-networking claim enforced rather than merely audited.
 

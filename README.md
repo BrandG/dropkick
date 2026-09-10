@@ -50,6 +50,12 @@ to dismiss it.
 Double-`Esc` dismisses from anywhere. `Ctrl+C` is a full alias for `Esc` — some
 terminals swallow `Esc`, and the habit sticks.
 
+`Alt+/` puts the keys on screen: the ones for the tool you are in, and the ones
+that work everywhere. It is an overlay rather than a tab, so it costs none of
+the ten slots, and `Esc` takes it away like any other level. The tab bar keeps
+working while it is up, so `Alt+H` and `Alt+L` page through the whole manual —
+which is why one screen per tool is enough and nothing here scrolls.
+
 ## The rules
 
 * **Offline only.** Not "works offline". There is no network. Dropkick does not
@@ -356,6 +362,7 @@ and a key never moves once assigned:
 | `Alt+Y` | Generate | built — passwords and UUIDs; hashes planned |
 | `Alt+U` | Color | built — hex/rgb/hsl/names; eyedropper blocked by COSMIC |
 | `Alt+I` `Alt+O` `Alt+P` | — | deliberately unspent |
+| `Alt+/` | Help | an overlay, not a tool — it spends no slot |
 
 Calculator takes a plain expression: `+ - * / % ^`, parentheses, `sqrt abs ln
 log sin cos tan round floor ceil`, the constants `pi` and `e`, and `ans` for the

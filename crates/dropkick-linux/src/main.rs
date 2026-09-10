@@ -1398,6 +1398,22 @@ everywhere.";
             }),
         ),
         (
+            "help-scratchpad",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::alt('/'), 0);
+            }),
+        ),
+        (
+            "help-calendar",
+            Box::new(|app: &mut App| {
+                // The longest key column of the seven, so it is the one that
+                // shows whether the two columns collide.
+                app.on_key(KeyPress::alt('r'), 0);
+                app.on_key(KeyPress::alt('/'), 0);
+            }),
+        ),
+        (
             "color-opening",
             Box::new(|app: &mut App| {
                 // Nothing typed: what someone sees the first time they land on

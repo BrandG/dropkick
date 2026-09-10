@@ -93,6 +93,9 @@ pub struct App {
     pub generate: Generate,
     pub calendar: Calendar,
     pub color: ColorTool,
+    /// Whether the help page is over the content. Not a tool: it costs no tab
+    /// slot, and it is a rung on the Esc ladder like any other level.
+    pub help: bool,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -111,6 +114,7 @@ impl Default for App {
             generate: Generate::new(),
             calendar: Calendar::new(),
             color: ColorTool::new(),
+            help: false,
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -130,6 +134,9 @@ impl App {
     /// The hint line under the content, the "those aren't buttons, they're
     /// reminders" row.
     pub fn hints(&self) -> &'static str {
+        if self.help {
+            return "esc closes   alt+/ closes   alt+h l pages through the tools";
+        }
         match self.active {
             ToolId::Calculator => "2+2   25 ft in m   today + 90 days   ans reuses last   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
@@ -258,6 +265,9 @@ impl App {
     /// The platform calls this when the panel is summoned. Resume must not mean
     /// "put whatever was on screen last time back on screen".
     pub fn on_summon(&mut self) {
+        // Including the help page: summoning to a page of keys instead of the
+        // tool you left is exactly the resume this function exists to prevent.
+        self.help = false;
         self.on_enter_tool();
     }
 
@@ -285,6 +295,16 @@ impl App {
                 // also the directions the Scratchpad already uses.
                 if c == 'h' || c == 'l' {
                     return self.cycle(c == 'l');
+                }
+                // `/` rather than `?`: `?` is Shift+/, and in insert mode that
+                // is a character someone is trying to type.
+                //
+                // It toggles. A key that opens something and then does nothing
+                // is a key you press twice wondering if it registered.
+                if c == '/' {
+                    self.help = !self.help;
+                    self.notice = None;
+                    return Response::Redraw;
                 }
                 if let Some(tool) = TOOLS.iter().find(|t| t.key == c) {
                     self.notice = None;
@@ -316,6 +336,13 @@ impl App {
             }
             self.last_esc_ms = Some(now_ms);
             self.notice = None;
+            // The help page is the top rung. It is over the tool, so it comes
+            // off before the tool's own levels do -- and it must not dismiss,
+            // or reading the keys would cost you the panel.
+            if self.help {
+                self.help = false;
+                return Response::Redraw;
+            }
             // Up one level, or out.
             let descended = match self.active {
                 ToolId::Scratchpad => self.scratchpad.leave_one_level(),
@@ -325,6 +352,16 @@ impl App {
                 _ => false,
             };
             return if descended { Response::Redraw } else { Response::Dismiss };
+        }
+
+        // With the page up, the tool underneath is not visible. Letting keys
+        // through would mean typing into a buffer nobody can see -- and the
+        // Scratchpad is the tool most likely to be open behind it.
+        //
+        // Nothing but esc, ctrl+c and alt+/ closes it. "Any key" would mean an
+        // accidental keypress takes away the thing you are reading.
+        if self.help {
+            return Response::Ignored;
         }
 
         self.notice = None;
@@ -838,5 +875,88 @@ mod tests {
         for t in TOOLS.iter() {
             assert!(t.key != 'h' && t.key != 'l', "{} collides with cycling", t.name);
         }
+    }
+
+    fn alt(c: char) -> KeyPress {
+        KeyPress::alt(c)
+    }
+
+    #[test]
+    fn alt_slash_opens_the_help_page_and_closes_it_again() {
+        let mut app = App::new();
+        assert!(!app.help);
+        assert_eq!(app.on_key(alt('/'), 0), Response::Redraw);
+        assert!(app.help);
+        assert_eq!(app.on_key(alt('/'), 0), Response::Redraw);
+        assert!(!app.help, "it toggles; a key that only opens gets pressed twice");
+    }
+
+    #[test]
+    fn esc_closes_the_help_page_rather_than_dismissing() {
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 0), Response::Redraw);
+        assert!(!app.help, "reading the keys must not cost you the panel");
+    }
+
+    #[test]
+    fn a_double_esc_still_dismisses_from_the_help_page() {
+        // "From anywhere, regardless of" is the whole point of the double tap.
+        // The help page being a rung on the ladder must not make it an escape
+        // hatch that swallows the escape hatch.
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1000), Response::Redraw);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Escape), 1100), Response::Dismiss);
+    }
+
+    #[test]
+    fn ctrl_c_closes_the_help_page_too() {
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        app.on_key(KeyPress::ctrl('c'), 0);
+        assert!(!app.help, "ctrl+c is a full alias for esc, here as everywhere");
+    }
+
+    #[test]
+    fn keys_do_not_reach_the_tool_underneath_the_help_page() {
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        // `i` would enter insert mode and the rest would be typed into a
+        // buffer nobody can see.
+        for c in "ixxx".chars() {
+            assert_eq!(app.on_key(KeyPress::ch(c), 0), Response::Ignored);
+        }
+        assert_eq!(app.scratchpad.mode, crate::scratchpad::Mode::Command);
+        assert_eq!(app.scratchpad.text(), "", "nothing was typed into the hidden buffer");
+    }
+
+    #[test]
+    fn the_tab_bar_pages_through_the_help_rather_than_closing_it() {
+        // This is what makes one page per tool enough: alt+h/l walks the whole
+        // manual without the overlay needing navigation keys of its own.
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        app.on_key(alt('e'), 0);
+        assert!(app.help, "still open");
+        assert_eq!(app.active, ToolId::Calculator, "and showing the calculator's keys");
+        app.on_key(alt('l'), 0);
+        assert!(app.help);
+    }
+
+    #[test]
+    fn summoning_never_lands_on_the_help_page() {
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        app.on_summon();
+        assert!(!app.help, "resume must not mean putting the last screen back");
+    }
+
+    #[test]
+    fn the_help_page_says_how_to_leave_it() {
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        let hints = app.hints();
+        assert!(hints.contains("esc"), "the one key it must not fail to mention: {hints}");
     }
 }
