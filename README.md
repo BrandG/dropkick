@@ -148,6 +148,8 @@ generate.upper = true    # A-Z
 generate.digits = true   # 0-9
 generate.symbols = true  # !@#$%^&*-_=+?
 generate.exclude_ambiguous = false   # leave out l I 1 O 0
+
+scratchpad.persist = true   # keep what you type between runs
 ```
 
 Calendar shows a month at a time. `hjkl` or the arrows move a day at a time,
@@ -190,6 +192,10 @@ Color converts between the ways a colour gets written: type `#6FB3F2`,
 `rgb(111, 179, 242)`, `hsl(210, 82%, 69%)` or a name like `tomato`, and it shows
 all of them at once with a swatch. `Ctrl+Y` copies the hex — a chord rather than a
 letter, because every letter you press is part of what you are typing.
+
+It opens on a slate grey rather than on nothing, so the tab shows you what it
+does before you have asked it anything. A line under the swatch says that is all
+the colour is; it goes away the moment you enter your own.
 
 **The eyedropper is built but switched off.** It would pick a colour off the
 screen through the desktop's colour portal, and it is implemented, tested and
@@ -380,6 +386,13 @@ Selection and the operators follow vi, so if you know vi you already know them:
 `v` selects by character and `V` by line, `d` and `y` cut and copy either a
 selection or a motion — `dd`, `yy`, `dG`, `ggdG` to wipe the lot. `Esc` unwinds
 one level at a time: selection, then mode, then the panel.
+
+Pasting works either way round: `p` and `P` in command mode, as vi has them, and
+**`Ctrl+V` in insert mode**, where everyone else's fingers go. It pastes whatever
+you last copied anywhere on the system — Dropkick is already watching the
+clipboard for the Clipboard tool, so there is no delay. If you have paused
+clipboard capture, it says so rather than pasting something from before the
+pause.
 
 **`Y` is the one place this departs from vi.** It copies the *whole buffer*,
 where vi would copy one line. That is how you get text out of Dropkick without it

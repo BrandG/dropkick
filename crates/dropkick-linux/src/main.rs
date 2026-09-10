@@ -1398,6 +1398,15 @@ everywhere.";
             }),
         ),
         (
+            "color-opening",
+            Box::new(|app: &mut App| {
+                // Nothing typed: what someone sees the first time they land on
+                // the tab. It used to be an empty pane, which read as a tool
+                // with nothing in it.
+                app.on_key(KeyPress::alt('u'), 0);
+            }),
+        ),
+        (
             "color",
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('u'), 0);

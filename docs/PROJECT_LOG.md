@@ -1851,6 +1851,101 @@ Two things that made that possible and are worth knowing:
 
 `DROPKICK_DEBUG_SCRATCHPAD` seeds the buffer at startup for exactly this test.
 
+## PASTE INTO THE SCRATCHPAD — 2026-08-25 (user)
+
+"Should we be able to paste text into the scratchpad? Because I can't seem to
+do that." No, you couldn't. The Scratchpad had a yank register and vi's `p`
+was unmapped, and nothing connected the buffer to the system clipboard at all.
+
+The vi answer would have been `p` alone. The user's counter-proposal was
+better: **`Ctrl+V` while in insert mode**. Both are implemented, because they
+answer different habits and cost the same:
+
+- **`Ctrl+V` in any mode.** A chord that works in insert but not command mode
+  is one more rule to remember for no benefit.
+- **`p` and `P` in command mode only.** In insert mode a `p` must be a `p` —
+  the same trap that put tab switching on a modifier, and there is a test that
+  types `pop` and expects `pop`.
+
+`Ctrl+V` arrives at all because with Ctrl held the utf8 byte is a control
+character, gets filtered, and the keysym fallback yields `'v'` — the path that
+already makes `Alt+Q` work. **Confirmed on hardware by the user**, which is the
+part no test could reach: key repeat taught this project that a handler existing
+proves nothing about it being called.
+
+### The clipboard stays outside the Scratchpad
+
+`Scratchpad::paste(text, after)` takes the text as an argument. It does not
+know a clipboard exists, in the same way it does not know a file system does.
+The app layer sources the text, next to `Ctrl+C`→Esc and the Color tool's
+`Ctrl+Y`.
+
+Sourcing is free: Dropkick already watches the selection for the Clipboard
+tool, so the newest entry is in memory and no Wayland round trip happens.
+
+**And when capture is paused, it refuses.** `clipboard_text` returns an error
+rather than the last entry captured before the pause. Text that looks like your
+clipboard but is not is the quiet wrong answer, and pasting it into notes is
+how it would go unnoticed.
+
+### Two details
+
+**Tabs become four spaces.** A tab cannot be typed into the buffer, so paste
+would otherwise be the only source of a character the editor can neither
+produce nor render.
+
+**One snapshot per paste**, so a single `u` undoes the whole thing however many
+lines arrived. `\r` is stripped.
+
+12 scratchpad tests and 7 app tests. A check while updating the README found
+`scratchpad.persist` missing from its settings list; all eleven are there now.
+
+## THE COLOUR TOOL OPENED ON NOTHING — 2026-08-25 (user)
+
+"When I go to the color picker, the screen is pretty blank, which might make a
+newb think there's nothing to it."
+
+An empty pane with a text cursor reads as a tool with nothing in it. Every
+other tab shows its shape immediately — the Calendar has a month, the Timer has
+a readout — and Color had a rule and a prompt.
+
+So it opens on a colour. `color::SEED` is **slategray, #708090**, chosen
+against three criteria:
+
+- **Dull on purpose.** This is scenery you flip past on the way somewhere else.
+  A saturated colour would announce itself every time the tab is touched.
+- **An exact CSS name**, so the fourth row reads `name slategray` rather than
+  `nearest` — the more interesting of the two things that row can say.
+- **Not grey enough to be degenerate.** A true neutral has no hue, so the `hsl`
+  row would read `hsl(0, 0%, 50%)` and teach nothing. `hsl(210, 13%, 50%)` is
+  still calm and still a demonstration.
+
+### The seed needs to admit what it is
+
+Seeding a swatch removes the one instruction the pane gave, and replaces it
+with an answer to a question nobody asked. `ColorTool::seeded` tracks that,
+cleared by `set` — so both entering a colour and picking one off the screen
+retire the line. Under the swatch: *a starting colour, so the tab is not empty
+-- type your own below*.
+
+It deliberately does not repeat the syntax. The hint row along the bottom is
+already listing every form the input accepts, and saying it twice on one screen
+makes both look like noise.
+
+### Two things fell out of it
+
+**The old empty-state line was stale.** It said "press tab to pick one off the
+screen" — while the eyedropper is off and `Tab` answers "this desktop refuses
+colour picking". The hint row had been corrected for the switch; this line had
+not. It now follows the same switch, and a test checks both lines fit inside
+the panel, because the Calculator's error line was drawn off the right edge for
+exactly this reason.
+
+**`Ctrl+Y` copies the seed.** A test used to assert that copying with no colour
+does nothing; the honest version is that copying what the panel is displaying
+must work. A key that refuses what is visibly on screen is worse than one that
+is not offered. The `current.is_none()` guard stays for the picker path.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

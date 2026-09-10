@@ -133,10 +133,10 @@ impl App {
         match self.active {
             ToolId::Calculator => "2+2   25 ft in m   today + 90 days   ans reuses last   esc x",
             ToolId::Scratchpad => match self.scratchpad.mode {
-                crate::scratchpad::Mode::Insert => "INSERT   esc or ctrl-c leaves",
+                crate::scratchpad::Mode::Insert => "INSERT   ctrl-v pastes   esc or ctrl-c leaves",
                 crate::scratchpad::Mode::Visual => "VISUAL   d cut   y copy   hjkl gg G extend   esc back",
                 crate::scratchpad::Mode::VisualLine => "VISUAL LINE   d cut   y copy   jk gg G extend   esc back",
-                crate::scratchpad::Mode::Command => "i insert  v sel  dd cut  yy copy  Y copy all  u undo  hjkl move  esc x",
+                crate::scratchpad::Mode::Command => "i insert  p paste  v sel  dd cut  yy copy  Y copy all  u undo  esc x",
             },
             ToolId::Clipboard => {
                 if !self.clipboard.revealed {
@@ -214,6 +214,24 @@ impl App {
     fn ask_for_entropy(&mut self) {
         if let Some(n) = self.generate.wants_entropy() {
             self.pending.push(Request::Entropy(n));
+        }
+    }
+
+    /// The most recent thing copied anywhere on the system, for pasting.
+    ///
+    /// Dropkick captures the clipboard in the background already, so this needs
+    /// no round trip to whichever application owns the selection.
+    ///
+    /// Refuses while capture is paused rather than handing back whatever was
+    /// current before the pause. Pasting something stale that *looks* like your
+    /// clipboard is the quiet wrong answer this project keeps designing out.
+    fn clipboard_text(&self) -> Result<String, &'static str> {
+        if self.clipboard.capture_paused {
+            return Err("clipboard capture is paused, so there is nothing fresh to paste");
+        }
+        match self.clipboard.entries().first() {
+            Some(e) => Ok(e.text.clone()),
+            None => Err("nothing has been copied yet"),
         }
     }
 
@@ -319,6 +337,28 @@ impl App {
                 }
             }
             ToolId::Scratchpad => {
+                // Paste is mediated here rather than inside the Scratchpad: the
+                // buffer should not know that a clipboard exists, the same way
+                // it does not know how `y` reaches the system.
+                //
+                // Ctrl+V works in any mode, because that is where everyone
+                // else's fingers go. `p`/`P` are command-mode only -- in insert
+                // mode a `p` has to be a `p`, which is the whole reason tab
+                // switching lives on a modifier.
+                let ctrl_v = press.mods.ctrl && press.key == Key::Char('v');
+                let vi_paste = press.mods.is_plain()
+                    && self.scratchpad.mode == crate::scratchpad::Mode::Command
+                    && matches!(press.key, Key::Char('p') | Key::Char('P'));
+                if ctrl_v || vi_paste {
+                    match self.clipboard_text() {
+                        Ok(text) => {
+                            let after = press.key != Key::Char('P');
+                            self.scratchpad.paste(&text, after);
+                        }
+                        Err(why) => self.notice = Some(why.to_string()),
+                    }
+                    return Response::Redraw;
+                }
                 let consumed = self.scratchpad.on_key(press);
                 if let Some(text) = self.scratchpad.take_yank() {
                     // Say how much, not just that it happened: a yank whose
@@ -680,6 +720,74 @@ mod tests {
             "only Generate needs entropy; {:?}",
             app.pending
         );
+    }
+
+    fn with_clipboard(text: &str) -> App {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('q'), 0);
+        app.clipboard.record(text, &[]);
+        app
+    }
+
+    #[test]
+    fn p_pastes_in_command_mode() {
+        let mut app = with_clipboard("pasted");
+        app.on_key(KeyPress::ch('p'), 0);
+        assert_eq!(app.scratchpad.text(), "pasted");
+    }
+
+    #[test]
+    fn p_still_types_a_p_in_insert_mode() {
+        // The trap this whole design is arranged around: a key that means two
+        // things does the wrong one. In insert mode every letter is a letter.
+        let mut app = with_clipboard("SHOULD NOT APPEAR");
+        app.on_key(KeyPress::ch('i'), 0);
+        for c in "pop".chars() {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        assert_eq!(app.scratchpad.text(), "pop");
+    }
+
+    #[test]
+    fn ctrl_v_pastes_in_insert_mode() {
+        let mut app = with_clipboard("from the clipboard");
+        app.on_key(KeyPress::ch('i'), 0);
+        app.on_key(KeyPress::ctrl('v'), 0);
+        assert_eq!(app.scratchpad.text(), "from the clipboard");
+    }
+
+    #[test]
+    fn ctrl_v_also_works_in_command_mode() {
+        // A chord that works in one mode and not the other is one more thing to
+        // remember for no benefit.
+        let mut app = with_clipboard("anywhere");
+        app.on_key(KeyPress::ctrl('v'), 0);
+        assert_eq!(app.scratchpad.text(), "anywhere");
+    }
+
+    #[test]
+    fn pasting_with_capture_paused_says_so_rather_than_pasting_something_stale() {
+        let mut app = with_clipboard("copied before the pause");
+        app.clipboard.capture_paused = true;
+        app.on_key(KeyPress::ch('p'), 0);
+        assert_eq!(app.scratchpad.text(), "", "stale text was pasted");
+        assert!(app.notice.as_deref().unwrap().contains("paused"));
+    }
+
+    #[test]
+    fn pasting_with_an_empty_clipboard_explains_itself() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('q'), 0);
+        app.on_key(KeyPress::ch('p'), 0);
+        assert!(app.notice.is_some());
+        assert_eq!(app.scratchpad.text(), "");
+    }
+
+    #[test]
+    fn ctrl_v_does_not_disturb_other_tools() {
+        let mut app = App::new();
+        app.on_key(KeyPress::alt('e'), 0);
+        assert_eq!(app.on_key(KeyPress::ctrl('v'), 0), Response::Ignored);
     }
 
     #[test]

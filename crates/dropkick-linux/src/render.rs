@@ -594,6 +594,29 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Said under the opening swatch, which nobody asked for and which would
+/// otherwise look like an answer to a question they do not remember asking.
+///
+/// It does not repeat the syntax -- the hint row along the bottom is already
+/// listing every form the input accepts, and saying it twice on one screen
+/// makes both look like noise.
+const COLOR_SEED_NOTE: &str = "a starting colour, so the tab is not empty -- type your own below";
+
+/// Said when there is no colour at all. Only reachable through
+/// `ColorTool::default`, but it is what the pane says if the seed ever goes
+/// away, so it has to be right and it has to fit.
+///
+/// It follows the eyedropper switch: offering `tab` while the key answers
+/// "the eyedropper is off" is how a panel that explains itself stops being
+/// believed.
+fn color_prompt(eyedropper: bool) -> &'static str {
+    if eyedropper {
+        "type a colour and press enter, or press tab to pick one off the screen"
+    } else {
+        "type a colour and press enter -- #6FB3F2, rgb(111,179,242), hsl(210,82%,69%) or a name"
+    }
+}
+
 fn draw_color(
     app: &App,
     text: &mut TextRenderer,
@@ -649,9 +672,15 @@ fn draw_color(
             text.draw(canvas, tx + text.advance() * 9.0, y, &value, FG);
             y += lh * 1.35;
         }
+
+        // The opening colour is scenery, not an answer. Say so underneath it,
+        // or the tool looks like it has already been asked something.
+        if c.seeded && !c.picking {
+            let below = (sw_y + sw_h) as f32 + lh * 1.6;
+            text.draw(canvas, PAD, below, COLOR_SEED_NOTE, FAINT);
+        }
     } else if !c.picking {
-        let msg = "type a colour, or press tab to pick one off the screen";
-        text.draw(canvas, PAD, top as f32 + lh * 3.0, msg, FAINT);
+        text.draw(canvas, PAD, top as f32 + lh * 3.0, color_prompt(c.eyedropper), FAINT);
     }
 
     if c.picking {
@@ -1027,6 +1056,23 @@ mod tests {
             60.0 * ((r - g) / d + 4.0)
         };
         (h + 360.0) % 360.0
+    }
+
+    /// Both prompts have to fit between the margins. The calculator's error
+    /// line was drawn off the right-hand edge for exactly this reason, and the
+    /// font is fixed-width, so the check is arithmetic rather than a guess.
+    #[test]
+    fn the_colour_prompts_fit_inside_the_panel() {
+        let text = match TextRenderer::new(16.0) {
+            Ok(t) => t,
+            Err(_) => return, // no font on this machine; the other tests still run
+        };
+        let room = WIDTH as f32 - PAD * 2.0;
+        let lines = [color_prompt(true), color_prompt(false), COLOR_SEED_NOTE];
+        for msg in lines {
+            let w = text.width_of(msg);
+            assert!(w <= room, "prompt is {w}px wide, only {room}px of panel: {msg}");
+        }
     }
 
     const ALL_TOOLS: [ToolId; 7] = [

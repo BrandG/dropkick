@@ -208,7 +208,21 @@ pub struct ColorTool {
     pub notice: Option<String>,
     /// Whether the eyedropper is offered at all. See [`Self::new`].
     pub eyedropper: bool,
+    /// True while [`SEED`] is on show and nobody has entered a colour yet, so
+    /// the panel can keep saying what to type. Without it, seeding the swatch
+    /// would silence the only instruction the tool gives.
+    pub seeded: bool,
 }
+
+/// The colour the tool opens on.
+///
+/// An empty Color tab reads as a tab with nothing in it: the layout only
+/// explains itself once there is a colour to lay out. Slate grey is dull on
+/// purpose -- this is scenery you flip past on the way to another tab, and a
+/// saturated one would announce itself every time. It is also an exact CSS
+/// name, so the fourth row reads `name slategray` rather than `nearest`, which
+/// shows the more interesting of the two things that row can say.
+pub const SEED: Color = Color { r: 112, g: 128, b: 144 };
 
 impl ColorTool {
     /// The eyedropper is **off**, and the switch is one line.
@@ -223,13 +237,14 @@ impl ColorTool {
     /// to try it again — if COSMIC ships an implementation, that is the whole
     /// change, and everything behind it still works.
     pub fn new() -> Self {
-        ColorTool { eyedropper: false, ..Self::default() }
+        ColorTool { eyedropper: false, current: Some(SEED), seeded: true, ..Self::default() }
     }
 
     pub fn set(&mut self, c: Color) {
         self.current = Some(c);
         self.problem = None;
         self.picking = false;
+        self.seeded = false;
         self.input.clear();
     }
 
@@ -520,9 +535,39 @@ mod tests {
         let mut t = ColorTool::new();
         tool_type(&mut t, "#gg0000");
         t.on_key(KeyPress::plain(Key::Enter));
-        assert!(t.current.is_none());
+        assert_eq!(t.current, Some(SEED), "a bad parse leaves the swatch alone");
         assert!(t.problem.is_some());
         assert_eq!(t.input, "#gg0000", "do not make them type it again");
+    }
+
+    #[test]
+    fn the_tool_opens_on_a_colour_rather_than_on_nothing() {
+        let t = ColorTool::new();
+        assert_eq!(t.current, Some(SEED));
+        assert!(t.seeded, "and it knows the colour is not an answer to anything");
+    }
+
+    #[test]
+    fn the_seed_is_an_exact_css_name() {
+        // Not decoration: it means the fourth row reads `name`, not `nearest`.
+        let (name, exact) = SEED.nearest_name();
+        assert!(exact);
+        assert_eq!(name, "slategray");
+    }
+
+    #[test]
+    fn entering_a_colour_stops_it_being_the_seed() {
+        let mut t = ColorTool::new();
+        tool_type(&mut t, "tomato");
+        t.on_key(KeyPress::plain(Key::Enter));
+        assert!(!t.seeded, "the prompt under the swatch has served its purpose");
+    }
+
+    #[test]
+    fn a_picked_colour_also_stops_it_being_the_seed() {
+        let mut t = ColorTool::new();
+        t.set(Color::new(1, 2, 3));
+        assert!(!t.seeded);
     }
 
     #[test]
@@ -569,12 +614,24 @@ mod tests {
     }
 
     #[test]
-    fn copying_reports_the_hex_and_does_nothing_without_a_colour() {
+    fn copying_reports_the_hex() {
         let mut t = ColorTool::new();
-        assert_eq!(t.copy_hex(), Outcome::Ignored);
+        // The seed is on screen with its hex written across it, so ctrl-y has
+        // to copy that. A key that refuses what the panel is displaying is
+        // worse than one that is not offered.
+        assert_eq!(t.copy_hex(), Outcome::Copy("#708090".to_string()));
         t.set(Color::new(255, 99, 71));
         assert_eq!(t.copy_hex(), Outcome::Copy("#FF6347".to_string()));
         assert!(t.notice.is_some());
+    }
+
+    #[test]
+    fn copying_does_nothing_when_there_is_no_colour_at_all() {
+        // `new` always seeds, so this state is only reachable through
+        // `default`. The guard stays anyway: `current` is an Option and the
+        // picker can hand back nothing.
+        let mut t = ColorTool::default();
+        assert_eq!(t.copy_hex(), Outcome::Ignored);
     }
 
     #[test]

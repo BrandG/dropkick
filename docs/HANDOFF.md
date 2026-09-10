@@ -14,13 +14,13 @@ maximum forever. `README.md` is the user-facing version.
 One user (Brand), on Pop!_OS 24.04 / COSMIC / Wayland. Windows is a stated
 future target; `dropkick-core` is kept free of anything OS-specific for it.
 
-## State as of 2026-08-22
+## State as of 2026-08-25
 
-**All seven tools built.** 298 tests, clippy clean at zero warnings.
+**All seven tools built.** 357 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
-| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators, persisted |
+| `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators, paste, persisted |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
 | `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
@@ -143,6 +143,14 @@ beside the target and renames it over. The temp must be in the same directory
 (rename is only atomic within a filesystem) and is created `0600` from the
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
+
+**Anything the panel displays, its keys must act on.** The Color tool opens on
+`color::SEED` so the tab is not blank, and `Ctrl+Y` copies it — a key that
+refuses what is visibly on screen is worse than one that is not offered. The
+same rule the other way round: the pane's empty-state line advertised `tab` for
+the eyedropper long after `Tab` had started answering "this desktop refuses
+colour picking". Both the hint row and that line now follow
+`ColorTool::eyedropper`.
 
 **The eyedropper is off behind one line.** `ColorTool::new` sets
 `eyedropper: false`; everything behind it — the portal call, the match rule, the

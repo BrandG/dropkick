@@ -131,6 +131,54 @@ impl Scratchpad {
         self.undo.clear();
     }
 
+    /// Insert text at the cursor.
+    ///
+    /// `after` is vi's distinction between `p` and `P`. It is ignored in insert
+    /// mode, where the cursor already sits *after* the character rather than on
+    /// it, so there is no "before" to mean.
+    ///
+    /// Tabs become spaces. A tab cannot be typed into this buffer -- insert mode
+    /// does not accept one -- so letting paste be the only source of them would
+    /// put a character in the file that the editor cannot produce or render.
+    pub fn paste(&mut self, text: &str, after: bool) {
+        if text.is_empty() {
+            return;
+        }
+        self.snapshot();
+        let text = text.replace('\r', "").replace('\t', "    ");
+
+        let col = if after && self.mode.is_command_like() && self.line_len() > 0 {
+            (self.cx + 1).min(self.line_len())
+        } else {
+            self.cx.min(self.line_len())
+        };
+        let at = self.byte_at(col);
+        let current = std::mem::take(&mut self.lines[self.cy]);
+        let (head, tail) = current.split_at(at);
+        let pieces: Vec<&str> = text.split('\n').collect();
+
+        if pieces.len() == 1 {
+            self.lines[self.cy] = format!("{head}{}{tail}", pieces[0]);
+            self.cx = col + pieces[0].chars().count();
+        } else {
+            let last = pieces[pieces.len() - 1];
+            let mut fresh = Vec::with_capacity(pieces.len());
+            fresh.push(format!("{head}{}", pieces[0]));
+            fresh.extend(pieces[1..pieces.len() - 1].iter().map(|p| (*p).to_string()));
+            fresh.push(format!("{last}{tail}"));
+            let added = fresh.len() - 1;
+            self.lines.splice(self.cy..=self.cy, fresh);
+            self.cy += added;
+            self.cx = last.chars().count();
+        }
+        // Command mode sits on a character, so the cursor lands on the last one
+        // pasted rather than past it.
+        if self.mode.is_command_like() {
+            self.cx = self.cx.saturating_sub(1);
+        }
+        self.clamp();
+    }
+
     fn snapshot(&mut self) {
         self.undo.push(Snapshot {
             lines: self.lines.clone(),
@@ -703,6 +751,116 @@ mod tests {
         n.load("from the file");
         assert!(!n.undo(), "undo reached back past the load");
         assert_eq!(n.text(), "from the file");
+    }
+
+    #[test]
+    fn paste_puts_single_line_text_after_the_cursor() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["ac".into()];
+        n.cx = 0; // on the 'a'
+        n.paste("b", true);
+        assert_eq!(n.text(), "abc", "p goes after the cursor");
+    }
+
+    #[test]
+    fn capital_p_puts_it_before() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["bc".into()];
+        n.cx = 0;
+        n.paste("a", false);
+        assert_eq!(n.text(), "abc");
+    }
+
+    #[test]
+    fn pasting_into_an_empty_buffer_works() {
+        let mut n = Scratchpad::new();
+        n.paste("hello", true);
+        assert_eq!(n.text(), "hello");
+    }
+
+    #[test]
+    fn multi_line_paste_splits_the_current_line() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["ad".into()];
+        n.cx = 0; // on 'a', paste after it
+        n.paste("b\nc", true);
+        assert_eq!(n.text(), "ab\ncd", "the tail follows the last pasted line");
+        assert_eq!(n.cy, 1);
+    }
+
+    #[test]
+    fn a_paste_ending_in_a_newline_leaves_an_empty_last_line() {
+        let mut n = Scratchpad::new();
+        n.paste("one\ntwo\n", true);
+        assert_eq!(n.lines, vec!["one", "two", ""]);
+    }
+
+    #[test]
+    fn pasting_in_insert_mode_lands_at_the_cursor_not_after_it() {
+        // Insert mode sits *after* the character, so `after` has no meaning and
+        // must not shift the text by one.
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "ac");
+        n.cx = 1; // between a and c
+        n.paste("b", true);
+        assert_eq!(n.text(), "abc");
+    }
+
+    #[test]
+    fn tabs_become_spaces_because_they_cannot_be_typed_here() {
+        let mut n = Scratchpad::new();
+        n.paste("a\tb", true);
+        assert_eq!(n.text(), "a    b");
+        assert!(!n.text().contains('\t'));
+    }
+
+    #[test]
+    fn windows_line_endings_do_not_leave_stray_characters() {
+        let mut n = Scratchpad::new();
+        n.paste("one\r\ntwo", true);
+        assert_eq!(n.lines, vec!["one", "two"]);
+    }
+
+    #[test]
+    fn a_paste_is_undone_in_one_step() {
+        let mut n = Scratchpad::new();
+        n.on_key(KeyPress::ch('i'));
+        type_str(&mut n, "keep");
+        n.leave_one_level();
+        let before = n.text();
+        n.paste("\nlots\nof\nlines", true);
+        assert_ne!(n.text(), before);
+        n.on_key(KeyPress::ch('u'));
+        assert_eq!(n.text(), before, "one u must take back the whole paste");
+    }
+
+    #[test]
+    fn pasting_nothing_changes_nothing() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["intact".into()];
+        n.paste("", true);
+        assert_eq!(n.text(), "intact");
+        assert!(!n.undo(), "an empty paste must not push an undo step");
+    }
+
+    #[test]
+    fn the_cursor_ends_on_the_last_pasted_character() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["a".into()];
+        n.cx = 0;
+        n.paste("xyz", true);
+        assert_eq!(n.text(), "axyz");
+        assert_eq!(n.cx, 3, "command mode sits on the last pasted character");
+    }
+
+    #[test]
+    fn pasting_multibyte_text_does_not_split_a_character() {
+        let mut n = Scratchpad::new();
+        n.lines = vec!["café".into()];
+        n.cx = 3; // on the é
+        n.paste("—dash", true);
+        assert_eq!(n.text(), "café—dash");
     }
 
     #[test]
