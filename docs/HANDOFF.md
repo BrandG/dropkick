@@ -240,10 +240,13 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
     is documented as *only ever appending* — existing lines are never
     rewritten, specifically so an edited value cannot be reverted. Saving a
     live change means editing a line in a commented file the user hand-edits,
-    which is the one thing that code promises not to do. Either build that
-    carefully (find the key, replace the value, keep every comment and every
-    other line) or decide the nudge is for the session only and the file stays
-    the source of truth. **Not decided.**
+    which is the one thing that code promises not to do.
+
+    **Decided (user, 2026-08-25): the nudge is for the session only.** The
+    file stays the source of truth, `top_up` keeps its append-only promise,
+    and nothing rewrites a line the user wrote. Restarting the daemon returns
+    to whatever `panel.opacity` says, which also makes the key safe to
+    experiment with.
 - **Repeating calendar entries, and alarms for them** — deliberately left out.
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence
