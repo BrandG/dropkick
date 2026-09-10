@@ -207,6 +207,43 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   testable against published vectors. **Decided: the input is the current
   clipboard contents**, so it needs no new UI beyond a third kind alongside
   `p` and `u`.
+- **Live opacity on `Alt+-` / `Alt+=`** (user, 2026-08-25) — nudge
+  `panel.opacity` by 5% a press, with the panel on screen, instead of editing
+  the file and restarting.
+
+  **The drawing side is already done.** `main.rs` reads
+  `settings.config.panel_opacity` *every frame* and hands it to
+  `draw_surface`, which scales the finished surface in `apply_opacity`. Change
+  the number, redraw, and it is on screen — no surface recreation, no protocol
+  work, no new per-frame cost, because that pass already runs on every frame.
+
+  Use `-` and `=`, and accept `_` and `+` beside them. `+` is Shift+`=` on this
+  layout, so binding only `+` would quietly require three fingers; Generate
+  already takes both pairs for exactly this reason. Neither collides — tool
+  keys are the top letter row, and `Alt+/` has already proved non-letter Alt
+  chords arrive through the keysym fallback.
+
+  **Keep the floor well above zero.** 20 is the existing clamp, in `Config`
+  and again at the draw call. A panel faded to nothing still holds the
+  keyboard, and the only way out would be the summon key — do not let a
+  repeat-key hold walk it there. Say the percentage in the notice line, or
+  the user is adjusting something they cannot read.
+
+  Two things that are actually decisions, not typing:
+
+  * **`dropkick-core` must not learn what opacity is.** It has zero
+    dependencies and no notion of rendering. The existing pattern is
+    `app::Request` — raise `NudgeOpacity(i32)` and let `main.rs` own the
+    number. That leaves *who writes the notice* open, since core owns the
+    notice line but would no longer know the value.
+  * **Persisting it fights the settings code on purpose.** `Settings::top_up`
+    is documented as *only ever appending* — existing lines are never
+    rewritten, specifically so an edited value cannot be reverted. Saving a
+    live change means editing a line in a commented file the user hand-edits,
+    which is the one thing that code promises not to do. Either build that
+    carefully (find the key, replace the value, keep every comment and every
+    other line) or decide the nudge is for the session only and the file stays
+    the source of truth. **Not decided.**
 - **Repeating calendar entries, and alarms for them** — deliberately left out.
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence
