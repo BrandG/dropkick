@@ -2020,6 +2020,111 @@ every tool's table fits between the tab bar and the hint row, and the two
 columns do not collide. Both use the same `help_row_y` the drawing does, so the
 check cannot drift from what is painted.
 
+## W, B AND O IN THE SCRATCHPAD — 2026-08-25 (user)
+
+Noticed by the user while I was reading the handlers to write `help.rs`: the
+Scratchpad had no word motions and no open-above. Three vi standards a vi user
+reaches for and misses.
+
+`w` and `b` go in `motion_for`, which is the one table feeding plain movement,
+visual extension and operator-pending alike — so `w`, `vw` and `dw` all arrived
+together and cannot drift apart.
+
+### vi's words, not whitespace-delimited ones
+
+vi classifies characters three ways: blank, word (alphanumeric and `_`), and
+punctuation. `w` skips the run you are standing in, then any blanks, and stops
+on the next run — which is why `w` in `foo.bar` stops three times and not once.
+
+Whitespace-delimited would have been simpler, and is what `W` means in vi. It
+was rejected because the Scratchpad's whole keymap is a bet that someone who
+knows vi already knows this, and the user made that bet explicitly back when
+`y` was decided.
+
+Both cross lines, and both **stop on a blank line**, as vi does. A paragraph
+break is usually the thing you were aiming for; skipping it makes `w` useless
+for getting around a note.
+
+### The exclusive part is the whole subtlety
+
+Spans in this file are inclusive. Word motions in vi are **exclusive** — `dw`
+stops *at* the next word rather than taking it — so `operator_span` ends one
+character before `motion_target` says.
+
+And **`dw` never joins lines.** When the next word is on a later line it takes
+to the end of the current line and stops. That is vi's own special case, and
+without it `dw` on the last word of a line silently pulls the next line up,
+which is never what was meant.
+
+`operator_span` already had every arm written out rather than derived, with a
+comment saying a clever derivation "would be wrong in a way nobody would notice
+until it ate a character". These two arms are that comment being right.
+
+### One deliberate divergence
+
+**`db` at column zero does nothing.** vi reaches back into the previous line.
+Of the two ways to be wrong about a rare case, refusing cannot eat something
+off a line you were not looking at. Written down in the README rather than left
+to be discovered.
+
+### The help page was already full
+
+Adding `w`/`b` made the Scratchpad table fourteen rows, and the fit test from
+the help overlay caught it immediately — thirteen is the maximum at the current
+spacing. `x` and `dd` merged onto one row to make space.
+
+That test was written two commits ago and has now earned itself twice: once
+catching a clipped `u undo`, once refusing a row that would not fit. The page
+has about one row of slack left, which is in the handoff.
+
+## THE HELP PAGE SCROLLS — 2026-08-25 (user)
+
+I had argued the opposite two commits earlier: one screen, no scrolling,
+because navigation keys need explaining and a help page is the worst place to
+need explaining. The user asked for scrolling instead, and was right — the
+argument was sound but the price was wrong. It was being paid in *content*.
+`w` and `b` had just cost the `x`/`dd` merge, and the next key would have cost
+another.
+
+**Arrow keys, not `j`/`k`.** Nothing else on this page is vi, and an arrow
+needs no explaining — which is the objection, answered rather than ignored.
+
+One thing kept from the old argument: **the page advertises scrolling only when
+there is something to scroll.** The hint row swaps a phrase, and the heading
+grows `1-13 of 15` only on a table that overflows. On a page that fits, `up`
+and `down` do nothing and nothing claims otherwise.
+
+### VISIBLE_ROWS is a promise core makes about a panel it cannot see
+
+`dropkick-core` owns the scroll position, has zero dependencies, and has no
+idea how tall anything is. The renderer knows the geometry but not the state.
+
+So core declares `help::VISIBLE_ROWS`, and a render test proves the panel has
+room for that many — **and that one more would not fit**, so the constant is
+the real maximum rather than a number someone rounded down and forgot. Claim
+one row too many and the last row is painted under the hint row, where
+scrolling can never reach it: content that exists, is counted, and cannot be
+seen.
+
+The dependency runs core → renderer, which is the same direction as everything
+else here: core states what it needs, the platform proves it can supply it.
+
+### Two details worth keeping
+
+**The description column is measured over the whole table, not the visible
+slice** — otherwise it jumps left and right as a long key string scrolls past.
+
+**Scrolling stops at both ends rather than running on.** A counter that keeps
+climbing past the last row means the same number of Ups does nothing on the
+way back, and the page feels stuck. It returns `Ignored` at the floor, so
+there is not even a repaint.
+
+Scroll resets on open, on close, and on paging to another tool — the same rule
+as everywhere else in Dropkick: nothing resumes where someone else left it.
+
+`x` and `dd` are back on their own rows, and `yy` and `Y` split too, since `Y`
+is the one key here that cannot be guessed and was sharing a line.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

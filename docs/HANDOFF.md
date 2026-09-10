@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-25
 
-**All seven tools built.** 370 tests, clippy clean at zero warnings.
+**All seven tools built.** 392 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -145,6 +145,22 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**`help::VISIBLE_ROWS` is a promise core makes about a panel it cannot see.**
+Core owns the help scroll position and has no idea how tall anything is, so it
+states how many rows are on screen and a render test proves the panel has room
+for exactly that many — and that one more would not fit, so the constant is the
+real maximum rather than a number someone rounded down. Claim one row too many
+and the last row draws under the hint row, where scrolling can never reach it.
+Tables longer than this scroll; the global column never does, and a test keeps
+it short enough not to need to.
+
+**Word motions are exclusive; most of the others are not.** `dw` stops *at* the
+next word rather than taking it, so `operator_span` ends the span one character
+before `motion_target` says. `dw` also never joins lines — vi's own special
+case, and without it `dw` on the last word of a line silently pulls the next
+line up. Every arm of `operator_span` is written out for this reason; do not
+try to derive them.
+
 **`help.rs` is a claim about the other files, and claims go stale silently.**
 Every row carries a `probe`: the plain characters it says work, which a test
 presses and requires the tool to consume. It earned itself on the first run —
@@ -265,11 +281,11 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   taking one. Real work: the capture protocol, a full-screen picker surface, and
   cursor handling. Turning the existing portal path back on is one field
   (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
-- **`w`, `b` and `O` in the Scratchpad** (user, 2026-08-25) — word-forward,
-  word-back and open-a-line-*above*. All three are vi standards a vi user will
-  reach for and currently miss; `motion_for` is the one table `w`/`b` go in, so
-  they land in `dw`, `vw` and plain movement at once. Adding them means adding
-  their rows to `help.rs`, which the fit test will police.
+- **`e` in the Scratchpad, if anyone misses it** — `w`, `b` and `O` are built;
+  `e` (end of word) is the obvious remaining vi motion and was not asked for.
+  It goes in `motion_for` like the others, and its operator span is
+  *inclusive*, unlike `w`'s — which is the whole subtlety, so read
+  `operator_span` before starting.
 - **seccomp filter** denying `AF_INET`/`AF_INET6` — planned, would make the
   no-networking claim enforced rather than merely audited.
 

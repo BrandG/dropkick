@@ -96,6 +96,9 @@ pub struct App {
     /// Whether the help page is over the content. Not a tool: it costs no tab
     /// slot, and it is a rung on the Esc ladder like any other level.
     pub help: bool,
+    /// First visible row of the help page's left column. Always zero when the
+    /// page is not up, so opening it never resumes someone else's scroll.
+    pub help_scroll: usize,
     /// Transient one-line message shown in the hint bar.
     pub notice: Option<String>,
     /// Drained by the platform after every key.
@@ -115,6 +118,7 @@ impl Default for App {
             calendar: Calendar::new(),
             color: ColorTool::new(),
             help: false,
+            help_scroll: 0,
             notice: None,
             pending: Vec::new(),
             last_esc_ms: None,
@@ -131,11 +135,25 @@ impl App {
         TOOLS.iter().find(|t| t.id == self.active).expect("active tool is registered")
     }
 
+    /// The help rows for whatever tool is active. One place, so the renderer,
+    /// the hint row and the scroll clamp cannot disagree about how many there
+    /// are.
+    pub fn help_rows(&self) -> &'static [crate::help::Row] {
+        crate::help::rows(self.active, self.color.eyedropper)
+    }
+
     /// The hint line under the content, the "those aren't buttons, they're
     /// reminders" row.
     pub fn hints(&self) -> &'static str {
         if self.help {
-            return "esc closes   alt+/ closes   alt+h l pages through the tools";
+            // Only mention scrolling when there is something to scroll. The
+            // hint row lists keys that work; on a page that fits, `up` and
+            // `down` do not.
+            return if self.help_rows().len() > crate::help::VISIBLE_ROWS {
+                "esc closes   up down scrolls   alt+h l pages through the tools"
+            } else {
+                "esc closes   alt+/ closes   alt+h l pages through the tools"
+            };
         }
         match self.active {
             ToolId::Calculator => "2+2   25 ft in m   today + 90 days   ans reuses last   esc x",
@@ -210,6 +228,10 @@ impl App {
         };
         self.active = built[next];
         self.on_enter_tool();
+        // Paging to another tool starts that tool's page at the top. Carrying
+        // a scroll across would open the next page part-way down for no reason
+        // the reader can see.
+        self.help_scroll = 0;
         self.notice = None;
         Response::Redraw
     }
@@ -268,6 +290,7 @@ impl App {
         // Including the help page: summoning to a page of keys instead of the
         // tool you left is exactly the resume this function exists to prevent.
         self.help = false;
+        self.help_scroll = 0;
         self.on_enter_tool();
     }
 
@@ -303,6 +326,7 @@ impl App {
                 // is a key you press twice wondering if it registered.
                 if c == '/' {
                     self.help = !self.help;
+                    self.help_scroll = 0;
                     self.notice = None;
                     return Response::Redraw;
                 }
@@ -321,6 +345,7 @@ impl App {
                     // not already be on screen.
                     self.active = tool.id;
                     self.on_enter_tool();
+                    self.help_scroll = 0;
                     return Response::Redraw;
                 }
             }
@@ -341,6 +366,7 @@ impl App {
             // or reading the keys would cost you the panel.
             if self.help {
                 self.help = false;
+                self.help_scroll = 0;
                 return Response::Redraw;
             }
             // Up one level, or out.
@@ -361,7 +387,23 @@ impl App {
         // Nothing but esc, ctrl+c and alt+/ closes it. "Any key" would mean an
         // accidental keypress takes away the thing you are reading.
         if self.help {
-            return Response::Ignored;
+            // Except the arrows, which scroll the tool's column when it is
+            // longer than the panel. Arrows rather than `j`/`k`: nothing else
+            // on this page is vi, and an arrow needs no explaining -- which
+            // matters on the one screen that exists to explain things.
+            let len = self.help_rows().len();
+            let max = crate::help::clamp_scroll(usize::MAX, len);
+            let want = match press.key {
+                Key::Down => self.help_scroll + 1,
+                Key::Up => self.help_scroll.saturating_sub(1),
+                _ => return Response::Ignored,
+            };
+            let want = want.min(max);
+            if want == self.help_scroll {
+                return Response::Ignored;
+            }
+            self.help_scroll = want;
+            return Response::Redraw;
         }
 
         self.notice = None;
@@ -950,6 +992,102 @@ mod tests {
         app.on_key(alt('/'), 0);
         app.on_summon();
         assert!(!app.help, "resume must not mean putting the last screen back");
+    }
+
+    /// A tool whose page is longer than the panel, so scrolling has somewhere
+    /// to go. The Scratchpad is the one; if that ever stops being true this
+    /// fails loudly rather than testing nothing.
+    fn scrollable_help() -> App {
+        let mut app = App::new();
+        app.active = ToolId::Scratchpad;
+        app.on_key(alt('/'), 0);
+        assert!(
+            app.help_rows().len() > crate::help::VISIBLE_ROWS,
+            "this test needs a page that does not fit"
+        );
+        app
+    }
+
+    #[test]
+    fn the_arrows_scroll_the_help_page() {
+        let mut app = scrollable_help();
+        assert_eq!(app.help_scroll, 0);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Down), 0), Response::Redraw);
+        assert_eq!(app.help_scroll, 1);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Up), 0), Response::Redraw);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn scrolling_stops_at_both_ends_rather_than_running_on() {
+        // The failure this prevents: a scroll counter that keeps climbing past
+        // the end, so the same number of Ups does nothing on the way back.
+        let mut app = scrollable_help();
+        let len = app.help_rows().len();
+        for _ in 0..50 {
+            app.on_key(KeyPress::plain(Key::Down), 0);
+        }
+        assert_eq!(app.help_scroll, len - crate::help::VISIBLE_ROWS, "the last row is the floor");
+        assert_eq!(
+            app.on_key(KeyPress::plain(Key::Down), 0),
+            Response::Ignored,
+            "and asking again is not a redraw"
+        );
+        app.on_key(KeyPress::plain(Key::Up), 0);
+        assert_eq!(app.help_scroll, len - crate::help::VISIBLE_ROWS - 1, "one back, not to the top");
+    }
+
+    #[test]
+    fn a_page_that_fits_does_not_scroll_at_all() {
+        let mut app = App::new();
+        app.active = ToolId::Timer;
+        app.on_key(alt('/'), 0);
+        assert!(app.help_rows().len() <= crate::help::VISIBLE_ROWS);
+        assert_eq!(app.on_key(KeyPress::plain(Key::Down), 0), Response::Ignored);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn the_hint_row_offers_scrolling_only_when_there_is_something_to_scroll() {
+        // The rule the whole panel runs on: never advertise a key that cannot
+        // work. `up`/`down` do nothing on a page that fits.
+        let long = scrollable_help();
+        assert!(long.hints().contains("up down"));
+
+        let mut short = App::new();
+        short.active = ToolId::Timer;
+        short.on_key(alt('/'), 0);
+        assert!(!short.hints().contains("up down"));
+    }
+
+    #[test]
+    fn paging_to_another_tool_starts_that_page_at_the_top() {
+        let mut app = scrollable_help();
+        app.on_key(KeyPress::plain(Key::Down), 0);
+        app.on_key(KeyPress::plain(Key::Down), 0);
+        assert_eq!(app.help_scroll, 2);
+        app.on_key(alt('l'), 0);
+        assert_eq!(app.help_scroll, 0, "a new page opens where its reader expects");
+        app.on_key(alt('q'), 0);
+        assert_eq!(app.help_scroll, 0);
+    }
+
+    #[test]
+    fn closing_the_help_page_forgets_where_it_was_scrolled_to() {
+        let mut app = scrollable_help();
+        app.on_key(KeyPress::plain(Key::Down), 0);
+        app.on_key(KeyPress::plain(Key::Escape), 0);
+        app.on_key(alt('/'), 0);
+        assert_eq!(app.help_scroll, 0, "opening it again starts at the top");
+    }
+
+    #[test]
+    fn the_arrows_still_belong_to_the_tool_when_the_help_page_is_shut() {
+        // The scroll must not have quietly taken a key the Scratchpad needs.
+        let mut app = App::new();
+        app.scratchpad.load("one\ntwo");
+        assert_eq!(app.on_key(KeyPress::plain(Key::Down), 0), Response::Redraw);
+        assert_eq!(app.scratchpad.cy, 1, "down moved the cursor, not a help page");
     }
 
     #[test]

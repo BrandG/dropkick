@@ -31,6 +31,21 @@ const fn row(keys: &'static str, what: &'static str, probe: &'static [char]) -> 
     Row { keys, what, probe }
 }
 
+/// How many rows of a tool's table are on screen at once.
+///
+/// Declared here rather than in the renderer, and this is the direction the
+/// dependency has to run: `dropkick-core` owns the scroll position and cannot
+/// see a panel, so it states the contract and a render test proves the panel
+/// honours it. If the panel ever gets taller, raise this and that test will
+/// confirm it rather than the two drifting apart.
+pub const VISIBLE_ROWS: usize = 13;
+
+/// Where a scrolled column starts, clamped so it can never strand the list
+/// past its end. Everything shorter than a screen pins to zero.
+pub fn clamp_scroll(scroll: usize, len: usize) -> usize {
+    scroll.min(len.saturating_sub(VISIBLE_ROWS))
+}
+
 /// The keys that work in every tool and every mode.
 ///
 /// `Super+D` is the one line here that Dropkick does not implement: it is a
@@ -51,15 +66,17 @@ pub const GLOBAL: &[Row] = &[
 /// Insert mode is `esc` away from all of it and takes every printable key.
 const SCRATCHPAD: &[Row] = &[
     row("i  a  A", "insert here, after, at end", &['i', 'a', 'A']),
-    row("o", "open a line below", &['o']),
+    row("o  O", "open a line below, above", &['o', 'O']),
     row("h j k l", "move (arrows work too)", &['h', 'j', 'k', 'l']),
+    row("w  b", "word forward, word back", &['w', 'b']),
     row("0  $", "start, end of the line", &['0', '$']),
     row("gg  G", "first line, last line", &['G']),
     row("v  V", "select, select whole lines", &['v', 'V']),
     row("x", "delete a character", &['x']),
     row("dd", "delete a line", &['d']),
     row("d then a move", "delete that far", &[]),
-    row("yy   Y", "copy a line, copy everything", &['Y']),
+    row("yy", "copy a line", &[]),
+    row("Y", "copy the whole buffer", &['Y']),
     row("p  P", "paste after, before", &['p', 'P']),
     row("ctrl+v", "paste, in any mode", &[]),
     row("u", "undo", &['u']),

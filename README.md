@@ -53,8 +53,11 @@ terminals swallow `Esc`, and the habit sticks.
 `Alt+/` puts the keys on screen: the ones for the tool you are in, and the ones
 that work everywhere. It is an overlay rather than a tab, so it costs none of
 the ten slots, and `Esc` takes it away like any other level. The tab bar keeps
-working while it is up, so `Alt+H` and `Alt+L` page through the whole manual —
-which is why one screen per tool is enough and nothing here scrolls.
+working while it is up, so `Alt+H` and `Alt+L` page through the whole manual.
+
+When a tool has more keys than fit, the arrow keys scroll that column and the
+heading says which part you are looking at — `3-15 of 15`. Both only appear
+when there is something off screen.
 
 ## The rules
 
@@ -385,14 +388,25 @@ keyboard, but it does cover the top of the screen, and a notification that waits
 for you is usually enough. Turn on `timer.show_panel` if you want an alarm that
 is unmissable rather than merely patient.
 
-Scratchpad is vi-flavoured without being a vi clone. `i` `a` `A` `o` enter insert
-mode and `Esc` leaves it; `hjkl` `0` `$` `gg` `G` move; `x` cuts a character and
-`u` undoes.
+Scratchpad is vi-flavoured without being a vi clone. `i` `a` `A` `o` `O` enter
+insert mode and `Esc` leaves it; `hjkl` `w` `b` `0` `$` `gg` `G` move; `x` cuts a
+character and `u` undoes.
+
+`w` and `b` are vi's words, not whitespace-delimited ones, so `w` in `foo.bar`
+stops at the dot. They cross lines, and they stop on a blank line, since a
+paragraph break is usually what you were aiming for.
 
 Selection and the operators follow vi, so if you know vi you already know them:
 `v` selects by character and `V` by line, `d` and `y` cut and copy either a
-selection or a motion — `dd`, `yy`, `dG`, `ggdG` to wipe the lot. `Esc` unwinds
-one level at a time: selection, then mode, then the panel.
+selection or a motion — `dd`, `yy`, `dw`, `dG`, `ggdG` to wipe the lot. `Esc`
+unwinds one level at a time: selection, then mode, then the panel.
+
+`dw` is exclusive and never joins lines, both as vi has them: it takes the word
+you are on and stops at the next one, and on the last word of a line it stops
+at the end of the line rather than pulling the next line up. `db` at the very
+start of a line does nothing — vi would reach back into the previous line, and
+of the two ways to be wrong about that, stopping is the one that cannot eat
+something you were not looking at.
 
 Pasting works either way round: `p` and `P` in command mode, as vi has them, and
 **`Ctrl+V` in insert mode**, where everyone else's fingers go. It pastes whatever

@@ -624,13 +624,17 @@ fn draw_help(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, 
 
     let left_x = PAD;
     let right_x = (canvas.w / 2) as f32 + PAD;
-    let rows = help::rows(app.active, app.color.eyedropper);
+    let rows = app.help_rows();
+    let from = help::clamp_scroll(app.help_scroll, rows.len());
 
     let draw_column =
         |text: &mut TextRenderer, canvas: &mut Canvas, x, title: &str, rows: &[help::Row], tint| {
             text.draw(canvas, x, top as f32 + lh * HELP_TITLE, title, tint);
+            // The gap is measured over the *whole* table, not the visible
+            // slice, so the description column does not jump left and right
+            // as it scrolls past a long key string.
             let gap = adv * column(rows);
-            for (i, r) in rows.iter().enumerate() {
+            for (i, r) in rows.iter().take(help::VISIBLE_ROWS).enumerate() {
                 let y = help_row_y(lh, top, i);
                 // A row with no keys is a note about the tool rather than a
                 // key, so it sits in the description column on its own.
@@ -639,8 +643,20 @@ fn draw_help(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, 
             }
         };
 
-    draw_column(text, canvas, left_x, &tool.name.to_uppercase(), rows, accent(app.active));
+    let title = tool.name.to_uppercase();
+    draw_column(text, canvas, left_x, &title, &rows[from..], accent(app.active));
     draw_column(text, canvas, right_x, "EVERYWHERE", help::GLOBAL, DIM);
+
+    // Which slice of a long table is on screen. Beside the heading rather than
+    // on a row of its own, since a row is the thing in short supply -- and it
+    // only appears when there is something off screen, so a page that fits
+    // never grows a counter telling you it fits.
+    if rows.len() > help::VISIBLE_ROWS {
+        let last = (from + help::VISIBLE_ROWS).min(rows.len());
+        let label = format!("{}-{} of {}", from + 1, last, rows.len());
+        let x = left_x + adv * (title.chars().count() as f32 + 3.0);
+        text.draw(canvas, x, top as f32 + lh * HELP_TITLE, &label, FAINT);
+    }
 
     // A hairline between the columns, so the eye does not read across.
     let mid = canvas.w / 2 + PAD as i32 / 2;
@@ -1125,34 +1141,40 @@ mod tests {
         (h + 360.0) % 360.0
     }
 
-    /// The help page fits on one screen or it is not a help page: it has no
-    /// scrolling and no paging keys, on purpose, because those keys would then
-    /// need explaining. Every tool's table has to fit, and the check uses the
-    /// same geometry the drawing does.
+    /// `help::VISIBLE_ROWS` is a promise core makes on the renderer's behalf:
+    /// core owns the scroll position and cannot see a panel, so it states how
+    /// many rows are on screen and this proves the panel actually has room for
+    /// that many.
+    ///
+    /// It is the load-bearing half of scrolling. Claim one row too many and
+    /// the last one is drawn under the hint row, where scrolling can never
+    /// reach it.
     #[test]
-    fn every_help_page_fits_on_one_screen() {
+    fn the_panel_has_room_for_as_many_rows_as_core_claims() {
         let text = match TextRenderer::new(16.0) {
             Ok(t) => t,
             Err(_) => return,
         };
         let lh = text.line_height();
         let (top, bottom) = (TAB_H + 1, HEIGHT as i32 - HINT_H);
-        for tool in ALL_TOOLS {
-            for eyedropper in [true, false] {
-                let rows = help::rows(tool, eyedropper);
-                let last = help_row_y(lh, top, rows.len() - 1);
-                // A baseline, so allow for what hangs below it.
-                let floor = bottom as f32 - lh * 0.4;
-                assert!(
-                    last <= floor,
-                    "{tool:?} help is {} rows, last baseline {last} past {floor}",
-                    rows.len()
-                );
-            }
-        }
-        // And the global column, which is drawn beside every one of them.
-        let last = help_row_y(lh, top, help::GLOBAL.len() - 1);
-        assert!(last <= bottom as f32 - lh * 0.4);
+        // A baseline, so allow for what hangs below it.
+        let floor = bottom as f32 - lh * 0.4;
+        let last = help_row_y(lh, top, help::VISIBLE_ROWS - 1);
+        assert!(last <= floor, "{} rows reach {last}, past {floor}", help::VISIBLE_ROWS);
+
+        // And one more would not fit, so the constant is the real maximum
+        // rather than a number someone rounded down and forgot.
+        let over = help_row_y(lh, top, help::VISIBLE_ROWS);
+        assert!(over > floor, "there is room for more than VISIBLE_ROWS; raise it");
+    }
+
+    /// The global column is never scrolled, so it has to fit outright.
+    #[test]
+    fn the_everywhere_column_needs_no_scrolling() {
+        assert!(
+            help::GLOBAL.len() <= help::VISIBLE_ROWS,
+            "the global column is drawn beside every page and cannot be scrolled"
+        );
     }
 
     /// The two columns must not run into each other. The left one is as wide

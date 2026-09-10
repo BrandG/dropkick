@@ -48,8 +48,33 @@ enum Motion {
     LineEnd,
     FirstLine,
     LastLine,
+    WordForward,
+    WordBack,
     /// The doubled operator — the `dd` in `dd`, the `yy` in `yy`.
     WholeLine,
+}
+
+/// vi's three kinds of character, which is what makes `w` stop at the `.` in
+/// `foo.bar` instead of running to the end.
+///
+/// Whitespace-delimited words would have been simpler and are what `W` means
+/// in vi. This tool follows `w`, because the Scratchpad's whole keymap is a
+/// bet that someone who knows vi already knows this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Class {
+    Space,
+    Word,
+    Punct,
+}
+
+fn class(c: char) -> Class {
+    if c.is_whitespace() {
+        Class::Space
+    } else if c.is_alphanumeric() || c == '_' {
+        Class::Word
+    } else {
+        Class::Punct
+    }
 }
 
 /// An inclusive range over the buffer, in logical (line, character) positions.
@@ -279,8 +304,82 @@ impl Scratchpad {
             Motion::LineEnd => Some((self.cy, self.line_len().saturating_sub(1))),
             Motion::FirstLine => Some((0, 0)),
             Motion::LastLine => Some((last, 0)),
+            Motion::WordForward => self.word_forward(),
+            Motion::WordBack => self.word_back(),
             Motion::WholeLine => Some((self.cy, self.cx)),
         }
+    }
+
+    /// The start of the next word, crossing lines.
+    ///
+    /// An empty line counts as a word, as it does in vi — otherwise `w` skips
+    /// straight over the paragraph break you were aiming for.
+    fn word_forward(&self) -> Option<(usize, usize)> {
+        let mut y = self.cy;
+        let mut x = self.cx;
+        let mut chars: Vec<char> = self.lines[y].chars().collect();
+
+        // Off the end of whatever run the cursor is standing in.
+        if let Some(&c) = chars.get(x) {
+            let start = class(c);
+            while x < chars.len() && class(chars[x]) == start {
+                x += 1;
+            }
+        }
+        // Then over any whitespace, which is where the line crossing happens.
+        loop {
+            if x >= chars.len() {
+                if y + 1 >= self.lines.len() {
+                    return None;
+                }
+                y += 1;
+                x = 0;
+                chars = self.lines[y].chars().collect();
+                if chars.is_empty() {
+                    return Some((y, 0));
+                }
+                continue;
+            }
+            if class(chars[x]) == Class::Space {
+                x += 1;
+                continue;
+            }
+            return Some((y, x));
+        }
+    }
+
+    /// The start of the word before the cursor, crossing lines.
+    fn word_back(&self) -> Option<(usize, usize)> {
+        let mut y = self.cy;
+        let mut x = self.cx.min(self.line_len());
+        let mut chars: Vec<char> = self.lines[y].chars().collect();
+
+        // One character back, then back over whitespace, until something
+        // solid is under us.
+        loop {
+            if x == 0 {
+                if y == 0 {
+                    return None;
+                }
+                y -= 1;
+                chars = self.lines[y].chars().collect();
+                if chars.is_empty() {
+                    return Some((y, 0));
+                }
+                x = chars.len();
+            }
+            x -= 1;
+            if class(chars[x]) != Class::Space {
+                break;
+            }
+        }
+
+        // Then to the front of the run we landed in.
+        let run = class(chars[x]);
+        while x > 0 && class(chars[x - 1]) == run {
+            x -= 1;
+        }
+        Some((y, x))
     }
 
     fn move_cursor(&mut self, m: Motion) {
@@ -346,6 +445,42 @@ impl Scratchpad {
                 hi: (self.cy, self.cx - 1),
                 linewise: false,
             }),
+            // Word motions are **exclusive**: `dw` deletes up to the next word
+            // and not the word itself. Spans here are inclusive, so the end is
+            // the character before the target.
+            //
+            // And `dw` never joins lines. When the next word is on a later
+            // line it takes to the end of this one and stops -- vi's own
+            // special case, and the reason `dw` on the last word of a line
+            // does not swallow the line break.
+            Motion::WordForward => {
+                let (ty, tx) = self.motion_target(m)?;
+                if ty != self.cy {
+                    return (self.line_len() > 0).then(|| Span {
+                        lo: cur,
+                        hi: (self.cy, self.line_len() - 1),
+                        linewise: false,
+                    });
+                }
+                (tx > self.cx).then(|| Span {
+                    lo: cur,
+                    hi: (self.cy, tx - 1),
+                    linewise: false,
+                })
+            }
+            // Also exclusive, and also kept on one line. vi's `db` at column
+            // zero reaches back into the previous line; that is rare, it is
+            // surprising when it happens, and stopping at the line start is
+            // the safer of the two ways to be wrong about it.
+            Motion::WordBack => {
+                let (ty, tx) = self.motion_target(m)?;
+                let from = if ty == self.cy { tx } else { 0 };
+                (self.cx > from).then(|| Span {
+                    lo: (self.cy, from),
+                    hi: (self.cy, self.cx - 1),
+                    linewise: false,
+                })
+            }
         }
     }
 
@@ -585,6 +720,14 @@ impl Scratchpad {
                 self.cx = 0;
                 true
             }
+            // `O` opens above. The cursor line number does not change -- the
+            // new blank line takes it, and everything below shifts down.
+            Key::Char('O') => {
+                self.enter_insert();
+                self.lines.insert(self.cy, String::new());
+                self.cx = 0;
+                true
+            }
             Key::Char('x') => {
                 if self.line_len() > 0 {
                     self.snapshot();
@@ -634,6 +777,8 @@ impl Scratchpad {
             Key::Char('0') | Key::Home => Motion::LineStart,
             Key::Char('$') | Key::End => Motion::LineEnd,
             Key::Char('G') => Motion::LastLine,
+            Key::Char('w') => Motion::WordForward,
+            Key::Char('b') => Motion::WordBack,
             _ => return None,
         })
     }
@@ -880,6 +1025,146 @@ mod tests {
         let mut n = Scratchpad::new();
         n.lines = vec!["one".into(), "two".into(), "three".into()];
         n
+    }
+
+    /// A buffer with the cursor parked somewhere, for the word motions.
+    fn at(lines: &[&str], cy: usize, cx: usize) -> Scratchpad {
+        let mut n = Scratchpad::new();
+        n.lines = lines.iter().map(|s| (*s).to_string()).collect();
+        n.cy = cy;
+        n.cx = cx;
+        n
+    }
+
+    #[test]
+    fn w_goes_to_the_start_of_the_next_word() {
+        let mut n = at(&["the quick brown"], 0, 0);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 4));
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 10));
+    }
+
+    #[test]
+    fn w_stops_at_punctuation_the_way_vi_does() {
+        // The whole reason for classifying characters rather than splitting on
+        // spaces: `w` in `foo.bar` stops three times, not once.
+        let mut n = at(&["foo.bar baz"], 0, 0);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 3), "on the dot");
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 4), "on `bar`");
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 8), "on `baz`");
+    }
+
+    #[test]
+    fn w_and_b_cross_lines() {
+        let mut n = at(&["one two", "three"], 0, 4);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (1, 0), "onto the next line");
+        n.on_key(KeyPress::ch('b'));
+        assert_eq!((n.cy, n.cx), (0, 4), "and back again");
+    }
+
+    #[test]
+    fn w_stops_on_a_blank_line() {
+        // A paragraph break is usually what you were aiming for; skipping it
+        // would make `w` useless for getting around a note.
+        let mut n = at(&["one", "", "two"], 0, 0);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (1, 0));
+    }
+
+    #[test]
+    fn b_from_inside_a_word_goes_to_its_start() {
+        let mut n = at(&["the quick brown"], 0, 12);
+        n.on_key(KeyPress::ch('b'));
+        assert_eq!((n.cy, n.cx), (0, 10), "the start of the word we were in");
+        n.on_key(KeyPress::ch('b'));
+        assert_eq!((n.cy, n.cx), (0, 4));
+    }
+
+    #[test]
+    fn neither_word_motion_falls_off_the_ends() {
+        let mut n = at(&["one"], 0, 0);
+        n.on_key(KeyPress::ch('b'));
+        assert_eq!((n.cy, n.cx), (0, 0), "nothing before the start");
+        let mut n = at(&["one"], 0, 2);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (0, 2), "nothing after the end");
+    }
+
+    #[test]
+    fn dw_takes_the_word_and_the_space_but_not_the_next_word() {
+        // The exclusive part. `dw` stops *at* the next word rather than
+        // eating it, which is the one thing everyone would notice.
+        let mut n = at(&["the quick brown"], 0, 0);
+        type_str(&mut n, "dw");
+        assert_eq!(n.text(), "quick brown");
+    }
+
+    #[test]
+    fn dw_on_the_last_word_of_a_line_does_not_join_the_lines() {
+        // vi's own special case. Without it, `dw` at the end of a line
+        // silently pulls the next line up, which is never what was meant.
+        let mut n = at(&["one two", "three"], 0, 4);
+        type_str(&mut n, "dw");
+        assert_eq!(n.text(), "one \nthree");
+    }
+
+    #[test]
+    fn db_deletes_back_to_the_start_of_the_previous_word() {
+        let mut n = at(&["the quick brown"], 0, 10);
+        type_str(&mut n, "db");
+        assert_eq!(n.text(), "the brown");
+    }
+
+    #[test]
+    fn db_at_the_start_of_a_line_does_nothing_rather_than_reaching_back() {
+        // A deliberate divergence: vi would delete into the previous line.
+        let mut n = at(&["one", "two"], 1, 0);
+        type_str(&mut n, "db");
+        assert_eq!(n.text(), "one\ntwo");
+    }
+
+    #[test]
+    fn a_word_motion_extends_a_selection() {
+        let mut n = at(&["the quick brown"], 0, 0);
+        type_str(&mut n, "vw");
+        let s = n.selection().unwrap();
+        assert_eq!((s.lo, s.hi), ((0, 0), (0, 4)));
+    }
+
+    #[test]
+    fn capital_o_opens_a_line_above() {
+        let mut n = three_lines();
+        n.on_key(KeyPress::ch('j'));
+        n.on_key(KeyPress::ch('O'));
+        assert_eq!(n.mode, Mode::Insert);
+        type_str(&mut n, "new");
+        assert_eq!(n.text(), "one\nnew\ntwo\nthree");
+    }
+
+    #[test]
+    fn capital_o_works_on_the_first_line() {
+        // `o` can always insert below; `O` on line zero is the case with
+        // nowhere above it to go, and it has to make somewhere.
+        let mut n = three_lines();
+        n.on_key(KeyPress::ch('O'));
+        type_str(&mut n, "top");
+        assert_eq!(n.text(), "top\none\ntwo\nthree");
+        assert_eq!(n.cy, 0);
+    }
+
+    #[test]
+    fn one_undo_takes_back_a_whole_opened_line() {
+        let mut n = three_lines();
+        n.on_key(KeyPress::ch('O'));
+        type_str(&mut n, "oops");
+        n.leave_one_level();
+        n.on_key(KeyPress::ch('u'));
+        assert_eq!(n.text(), "one\ntwo\nthree");
     }
 
     #[test]

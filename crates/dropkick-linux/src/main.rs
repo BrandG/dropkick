@@ -1405,6 +1405,18 @@ everywhere.";
             }),
         ),
         (
+            "help-scrolled",
+            Box::new(|app: &mut App| {
+                // The Scratchpad's page is longer than the panel, so this is
+                // the one that shows the counter and the scrolled window.
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::alt('/'), 0);
+                for _ in 0..2 {
+                    app.on_key(KeyPress::plain(DkKey::Down), 0);
+                }
+            }),
+        ),
+        (
             "help-calendar",
             Box::new(|app: &mut App| {
                 // The longest key column of the seven, so it is the one that
