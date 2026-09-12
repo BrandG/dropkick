@@ -161,6 +161,15 @@ generate.exclude_ambiguous = false   # leave out l I 1 O 0
 scratchpad.persist = true   # keep what you type between runs
 ```
 
+`Alt+-` and `Alt+=` change the opacity while the panel is up, 5% a press, so
+you can find the value you want by looking at it instead of editing and
+restarting. `Alt+_` and `Alt++` do the same, since `+` is Shift+`=`.
+
+**That change is for the session only.** Nothing is written back: the file
+stays the source of truth, and restarting returns to whatever `panel.opacity`
+says. It will not fade to nothing, either — 20% is the floor, because a panel
+you cannot see still has the keyboard.
+
 Calendar shows a month at a time. `hjkl` or the arrows move a day at a time,
 `[` and `]` step months, `t` jumps back to today, and a dot marks any day
 holding something. `a` adds an entry: type what it is, press enter, then type

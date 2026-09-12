@@ -59,6 +59,7 @@ pub const GLOBAL: &[Row] = &[
     row("esc", "up one level, or out", &[]),
     row("esc esc", "dismiss from anywhere", &[]),
     row("ctrl+c", "the same as esc", &[]),
+    row("alt+-  alt+=", "fainter, more solid", &[]),
     row("alt+/", "this page", &[]),
 ];
 

@@ -52,6 +52,15 @@ pub struct Config {
     pub panel_opacity: u32,
 }
 
+/// The bounds on [`Config::panel_opacity`], defined here with the setting
+/// rather than beside whatever changes it.
+///
+/// There are two ways in — the file at startup, and `Alt+-`/`Alt+=` while it
+/// is running — and if each carried its own idea of the floor, raising one
+/// would silently leave the other able to go below it.
+pub const OPACITY_MIN: u32 = 20;
+pub const OPACITY_MAX: u32 = 100;
+
 impl Default for Config {
     fn default() -> Self {
         Config {

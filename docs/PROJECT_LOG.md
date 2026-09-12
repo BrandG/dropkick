@@ -2125,6 +2125,70 @@ as everywhere else in Dropkick: nothing resumes where someone else left it.
 `x` and `dd` are back on their own rows, and `yy` and `Y` split too, since `Y`
 is the one key here that cannot be guessed and was sharing a line.
 
+## LIVE OPACITY ON ALT+- AND ALT+= — 2026-08-25 (user)
+
+Built as logged, with the session-only question already decided.
+
+`=` and `-` are the unshifted keys; `+` and `_` sit on the same two physical
+keys with Shift and are taken as well, so the obvious way to press "more
+solid" is not a three-finger chord. Generate accepts both pairs for the same
+reason. 5% a press.
+
+**The drawing side needed nothing.** `main.rs` already read `panel_opacity`
+every frame and `apply_opacity` already ran on every frame, so the whole
+visible change was moving a number. That was the estimate when this was
+logged, and it held.
+
+**Confirmed on hardware by the user**, so `Alt+-`/`Alt+=` do arrive through
+the keysym fallback the way `Alt+/` does — the part no test can reach. **The
+floor was checked under a held key too**, which is the case that matters:
+`stepped_opacity` refusing to go under 20 proves the arithmetic, not that
+repeat delivers what the arithmetic assumes.
+
+### Core asks for a direction, not an amount
+
+`Request::NudgeOpacity(Nudge::Up | Down)`. The core owns the keyboard, so it
+cannot avoid knowing the panel *has* an opacity — but the step, the bounds,
+the units, where the number lives and what the message says are all the
+platform's, because core cannot see a panel to decide any of them.
+
+The open question from the log was who writes the notice, since core owns the
+notice line but would no longer know the value. Answered by the platform
+writing it: `drain_requests` runs before the draw and already holds `&mut
+App`, so it sets `app.notice` itself. No new mechanism.
+
+### The floor is the whole safety story
+
+A panel faded to nothing still holds the keyboard and still swallows what you
+type. The only way out would be the summon key — and key repeat on a held
+`Alt+-` reaches the bottom in well under a second, so this cannot be left to
+the user noticing in time.
+
+`OPACITY_MIN`/`MAX` moved to `config.rs`, beside the setting itself. There are
+two ways in, the file at startup and the key while running, and each having
+its own idea of the floor is how one of them ends up able to go under it. The
+draw call clamps a third time, since it is the last point before the number
+becomes pixels.
+
+`stepped_opacity` is a free function in `settings.rs` rather than a method,
+because its only caller needs a live Wayland connection to exist and the
+arithmetic is the part that has to be right. Tested by stepping down five
+hundred times and asserting it never goes under — which is the actual failure
+mode, not a single decrement.
+
+It also clamps the *current* value before stepping, so a hand-edited file
+saying `panel.opacity = 3` moves up from the floor rather than to 8.
+
+### Nothing is written back
+
+Decided before building, and it keeps `Settings::top_up`'s promise never to
+rewrite a line the user typed. Restarting returns to whatever the file says,
+which also makes the key safe to hold down and play with.
+
+There is a test that reads this file's own source and fails if
+`stepped_opacity` ever grows a `write` or `save` — crude, but the property is
+"this stays pure", and that is not otherwise observable from outside.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

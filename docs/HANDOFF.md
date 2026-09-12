@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-25
 
-**All seven tools built.** 392 tests, clippy clean at zero warnings.
+**All seven tools built.** 404 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -29,6 +29,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 | `alt+u` | Color | built — hex/rgb/hsl/names; eyedropper written but **switched off**, COSMIC refuses it |
 | `alt+i/o/p` | — | deliberately unspent |
 | `alt+/` | Help | built — an overlay, not a tool; the active tool's keys plus the global ones |
+| `alt+-` `alt+=` | — | live panel opacity, 5% a press, session only |
 
 Summon is `Super+D`, bound in
 `~/.config/cosmic/com.system76.CosmicSettings.Shortcuts/v1/custom`.
@@ -145,6 +146,15 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**The opacity floor is load-bearing, and it is checked in three places.**
+`config::OPACITY_MIN` is 20 and the bounds live with the setting, because
+there are two ways in — the file at startup and `Alt+-` while running — and a
+second opinion about the floor would let one of them go under it. A panel
+faded to nothing still holds the keyboard and still swallows what you type;
+the only way out would be the summon key, and key repeat on a held `Alt+-`
+gets there in well under a second. `stepped_opacity` is a free function
+specifically so that can be tested without a compositor.
+
 **`help::VISIBLE_ROWS` is a promise core makes about a panel it cannot see.**
 Core owns the help scroll position and has no idea how tall anything is, so it
 states how many rows are on screen and a render test proves the panel has room
@@ -223,46 +233,6 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   testable against published vectors. **Decided: the input is the current
   clipboard contents**, so it needs no new UI beyond a third kind alongside
   `p` and `u`.
-- **Live opacity on `Alt+-` / `Alt+=`** (user, 2026-08-25) — nudge
-  `panel.opacity` by 5% a press, with the panel on screen, instead of editing
-  the file and restarting.
-
-  **The drawing side is already done.** `main.rs` reads
-  `settings.config.panel_opacity` *every frame* and hands it to
-  `draw_surface`, which scales the finished surface in `apply_opacity`. Change
-  the number, redraw, and it is on screen — no surface recreation, no protocol
-  work, no new per-frame cost, because that pass already runs on every frame.
-
-  Use `-` and `=`, and accept `_` and `+` beside them. `+` is Shift+`=` on this
-  layout, so binding only `+` would quietly require three fingers; Generate
-  already takes both pairs for exactly this reason. Neither collides — tool
-  keys are the top letter row, and `Alt+/` has already proved non-letter Alt
-  chords arrive through the keysym fallback.
-
-  **Keep the floor well above zero.** 20 is the existing clamp, in `Config`
-  and again at the draw call. A panel faded to nothing still holds the
-  keyboard, and the only way out would be the summon key — do not let a
-  repeat-key hold walk it there. Say the percentage in the notice line, or
-  the user is adjusting something they cannot read.
-
-  Two things that are actually decisions, not typing:
-
-  * **`dropkick-core` must not learn what opacity is.** It has zero
-    dependencies and no notion of rendering. The existing pattern is
-    `app::Request` — raise `NudgeOpacity(i32)` and let `main.rs` own the
-    number. That leaves *who writes the notice* open, since core owns the
-    notice line but would no longer know the value.
-  * **Persisting it fights the settings code on purpose.** `Settings::top_up`
-    is documented as *only ever appending* — existing lines are never
-    rewritten, specifically so an edited value cannot be reverted. Saving a
-    live change means editing a line in a commented file the user hand-edits,
-    which is the one thing that code promises not to do.
-
-    **Decided (user, 2026-08-25): the nudge is for the session only.** The
-    file stays the source of truth, `top_up` keeps its append-only promise,
-    and nothing rewrites a line the user wrote. Restarting the daemon returns
-    to whatever `panel.opacity` says, which also makes the key safe to
-    experiment with.
 - **Repeating calendar entries, and alarms for them** — deliberately left out.
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence

@@ -25,11 +25,12 @@
 //! wait for a configure, then attach. So every summon costs one compositor
 //! round trip, and size/anchor/interactivity must be re-applied each time.
 
-use dropkick_core::app::{App, Request, Response};
+use dropkick_core::app::{App, Nudge, Request, Response};
 use dropkick_core::key::{Key as DkKey, KeyPress, Mods};
 use dropkick_linux::font::{Canvas, TextRenderer};
 use dropkick_linux::render::{self, HEIGHT, SHADOW, SURFACE_H, SURFACE_W, WIDTH};
 use dropkick_linux::ipc;
+use dropkick_linux::settings::{opacity_notice, stepped_opacity};
 use dropkick_linux::{storage, tz};
 
 use std::collections::HashMap;
@@ -79,6 +80,7 @@ use smithay_client_toolkit::{
 const VISIBLE_MS: u64 = 90;
 /// Gap between bench cycles, so the compositor is not measured mid-animation.
 const GAP_MS: u64 = 150;
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
@@ -402,7 +404,13 @@ impl Dropkick {
 
         let mut canvas = Canvas::new(pixels, width as i32, height as i32);
         let now = self.started.elapsed().as_millis() as u64;
-        let opacity = (self.settings.config.panel_opacity.clamp(20, 100) * 255 / 100) as u8;
+        // Clamped again here, not only where the nudge and the file are read.
+        // This is the last point before the number becomes pixels, and it is
+        // the one that decides whether the panel can be seen at all.
+        let opacity =
+            (self.settings.config.panel_opacity.clamp(dropkick_core::config::OPACITY_MIN, dropkick_core::config::OPACITY_MAX)
+                * 255
+                / 100) as u8;
         render::draw_surface(&self.app, &mut self.text, &mut self.big, now, &mut canvas, opacity);
 
         let Some(layer) = self.layer.as_ref() else { return };
@@ -739,8 +747,21 @@ impl Dropkick {
                 Request::Entropy(n) => self.supply_entropy(n),
                 Request::SaveCalendar => self.schedule_calendar_save(),
                 Request::PickColor => self.start_eyedropper(),
+                Request::NudgeOpacity(dir) => self.nudge_opacity(dir),
             }
         }
+    }
+
+    /// Move `panel.opacity` a step and say where it landed.
+    ///
+    /// **Nothing is written to disk.** The settings file stays the source of
+    /// truth and `Settings::top_up` keeps its promise never to rewrite a line
+    /// the user typed; restarting the daemon goes back to whatever the file
+    /// says. That also makes the key safe to hold down and experiment with.
+    fn nudge_opacity(&mut self, dir: Nudge) {
+        let next = stepped_opacity(self.settings.config.panel_opacity, dir);
+        self.settings.config.panel_opacity = next;
+        self.app.notice = Some(opacity_notice(next));
     }
 
     /// Keep a tick source alive exactly while the timer is running.
@@ -1402,6 +1423,18 @@ everywhere.";
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('q'), 0);
                 app.on_key(KeyPress::alt('/'), 0);
+            }),
+        ),
+        (
+            "opacity-nudged",
+            Box::new(|app: &mut App| {
+                // Drives the real key path, so the notice is whatever a real
+                // press produces. `--shot` renders solid, so this shows the
+                // message rather than the effect.
+                app.on_key(KeyPress::alt('q'), 0);
+                app.on_key(KeyPress::alt('-'), 0);
+                let next = stepped_opacity(100, dropkick_core::app::Nudge::Down);
+                app.notice = Some(opacity_notice(next));
             }),
         ),
         (

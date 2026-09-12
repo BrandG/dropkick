@@ -6,7 +6,50 @@
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use dropkick_core::config::Config;
+use dropkick_core::app::Nudge;
+use dropkick_core::config::{Config, OPACITY_MAX, OPACITY_MIN};
+
+/// How far one press of `Alt+-` / `Alt+=` moves `panel.opacity`, in percent.
+///
+/// The step lives on this side and the *bounds* live with the setting in
+/// `config`. The core raises only a direction: it owns the keyboard, so it
+/// has to know the panel has an opacity, but it cannot see a panel and has no
+/// business deciding how much a press is worth.
+pub const OPACITY_STEP: u32 = 5;
+
+/// One step of opacity, clamped at both ends.
+///
+/// A free function so it can be tested: its only caller needs a live Wayland
+/// connection to exist, and the arithmetic here is the part that has to be
+/// right.
+///
+/// **The floor is the point.** A panel faded to nothing still holds the
+/// keyboard and still swallows what you type, and the only way out would be
+/// the summon key. Key repeat means a held `Alt+-` reaches the bottom in
+/// under a second, so this cannot be left to the user noticing in time.
+///
+/// The current value is clamped *before* stepping, so a file that says `5`
+/// moves in sensible increments up from the floor rather than from 5.
+pub fn stepped_opacity(now: u32, dir: Nudge) -> u32 {
+    let now = now.clamp(OPACITY_MIN, OPACITY_MAX);
+    match dir {
+        Nudge::Up => (now + OPACITY_STEP).min(OPACITY_MAX),
+        Nudge::Down => now.saturating_sub(OPACITY_STEP).max(OPACITY_MIN),
+    }
+}
+
+/// What the hint row says after a nudge.
+///
+/// It names the number, because the whole point is adjusting something by eye
+/// — and it says when there is no further to go, so pressing again and seeing
+/// nothing change reads as an edge rather than a dead key.
+pub fn opacity_notice(n: u32) -> String {
+    match n {
+        OPACITY_MAX => "opacity 100% - solid".to_string(),
+        OPACITY_MIN => format!("opacity {n}% - as faint as it goes"),
+        _ => format!("opacity {n}%"),
+    }
+}
 
 /// `$XDG_CONFIG_HOME/dropkick/config`, falling back to `~/.config`.
 pub fn config_path() -> Option<PathBuf> {
@@ -231,5 +274,73 @@ timer.show_panel = true
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600, "got {mode:o}");
         let _ = std::fs::remove_dir_all(path.parent().unwrap());
+    }
+
+    #[test]
+    fn opacity_steps_by_five_each_way() {
+        assert_eq!(stepped_opacity(60, Nudge::Up), 65);
+        assert_eq!(stepped_opacity(60, Nudge::Down), 55);
+    }
+
+    /// The one that matters. A panel faded to nothing still holds the
+    /// keyboard, so the only way out would be the summon key — and key repeat
+    /// on a held `Alt+-` gets there in well under a second.
+    #[test]
+    fn holding_the_key_down_can_never_make_the_panel_invisible() {
+        let mut n = OPACITY_MAX;
+        for _ in 0..500 {
+            n = stepped_opacity(n, Nudge::Down);
+            assert!(n >= OPACITY_MIN, "fell through the floor to {n}");
+        }
+        assert_eq!(n, OPACITY_MIN);
+    }
+
+    #[test]
+    fn it_stops_at_solid_rather_than_climbing_past_it() {
+        let mut n = OPACITY_MIN;
+        for _ in 0..500 {
+            n = stepped_opacity(n, Nudge::Up);
+            assert!(n <= OPACITY_MAX, "went past solid to {n}");
+        }
+        assert_eq!(n, OPACITY_MAX);
+    }
+
+    #[test]
+    fn a_value_near_the_floor_lands_on_it_rather_than_under_it() {
+        // 22 - 5 is 17, which is below the floor. It has to clamp, not wrap
+        // and not refuse.
+        assert_eq!(stepped_opacity(OPACITY_MIN + 2, Nudge::Down), OPACITY_MIN);
+        assert_eq!(stepped_opacity(OPACITY_MAX - 2, Nudge::Up), OPACITY_MAX);
+    }
+
+    #[test]
+    fn a_nonsense_value_in_the_file_is_dragged_into_range_first() {
+        // The file is hand-edited, so it can say anything. Stepping from 3
+        // must not produce 8.
+        assert_eq!(stepped_opacity(3, Nudge::Up), OPACITY_MIN + OPACITY_STEP);
+        assert_eq!(stepped_opacity(0, Nudge::Down), OPACITY_MIN);
+        assert_eq!(stepped_opacity(9999, Nudge::Up), OPACITY_MAX);
+    }
+
+    #[test]
+    fn the_notice_names_the_number_and_says_when_there_is_no_further_to_go() {
+        assert!(opacity_notice(65).contains("65%"));
+        assert!(opacity_notice(OPACITY_MAX).contains("solid"));
+        assert!(opacity_notice(OPACITY_MIN).contains("faint"));
+    }
+
+    /// Changing the opacity must never touch the file. The settings file is
+    /// hand-edited and `top_up` promises never to rewrite a line in it; a
+    /// session-only nudge is what keeps that promise true.
+    #[test]
+    fn nudging_opacity_writes_nothing_to_disk() {
+        let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/settings.rs"))
+            .expect("read own source");
+        let after = src.split("pub fn stepped_opacity").nth(1).expect("the function");
+        let body = after.split("\n}").next().unwrap();
+        assert!(
+            !body.contains("write") && !body.contains("save"),
+            "stepped_opacity must stay pure; it grew a write"
+        );
     }
 }

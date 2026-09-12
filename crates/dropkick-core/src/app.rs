@@ -72,6 +72,19 @@ pub enum Request {
     /// Run the desktop portal's screen colour picker. The answer comes back
     /// later, out of band, because the user has to click something first.
     PickColor,
+    /// Make the panel more or less solid.
+    ///
+    /// A direction, not an amount. The core owns the keyboard so it has to
+    /// know the panel *has* an opacity, but the step, the bounds, the units
+    /// and where the number lives are all the platform's — and it has no way
+    /// to see a panel to decide any of them.
+    NudgeOpacity(Nudge),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Nudge {
+    Up,
+    Down,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,6 +340,23 @@ impl App {
                 if c == '/' {
                     self.help = !self.help;
                     self.help_scroll = 0;
+                    self.notice = None;
+                    return Response::Redraw;
+                }
+                // Opacity, live. `=` and `-` are the unshifted keys; `+` and
+                // `_` sit on the same two physical keys with Shift, and are
+                // taken as well so that the obvious way to press "more solid"
+                // is not a three-finger chord. Generate accepts both pairs for
+                // exactly this reason.
+                //
+                // The platform writes the notice, because it is the one that
+                // knows what the number ended up being.
+                if let Some(dir) = match c {
+                    '=' | '+' => Some(Nudge::Up),
+                    '-' | '_' => Some(Nudge::Down),
+                    _ => None,
+                } {
+                    self.pending.push(Request::NudgeOpacity(dir));
                     self.notice = None;
                     return Response::Redraw;
                 }
@@ -1088,6 +1118,78 @@ mod tests {
         app.scratchpad.load("one\ntwo");
         assert_eq!(app.on_key(KeyPress::plain(Key::Down), 0), Response::Redraw);
         assert_eq!(app.scratchpad.cy, 1, "down moved the cursor, not a help page");
+    }
+
+    #[test]
+    fn alt_minus_and_alt_equals_ask_for_an_opacity_change() {
+        let mut app = App::new();
+        assert_eq!(app.on_key(alt('-'), 0), Response::Redraw);
+        assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Down)]);
+        app.pending.clear();
+        assert_eq!(app.on_key(alt('='), 0), Response::Redraw);
+        assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Up)]);
+    }
+
+    #[test]
+    fn the_shifted_halves_of_those_keys_work_too() {
+        // `+` is Shift+`=` on this layout, so binding only `+` would quietly
+        // make "more solid" a three-finger chord.
+        let mut app = App::new();
+        app.on_key(alt('+'), 0);
+        assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Up)]);
+        app.pending.clear();
+        app.on_key(alt('_'), 0);
+        assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Down)]);
+    }
+
+    #[test]
+    fn opacity_keys_work_from_every_tool_and_from_the_help_page() {
+        // Like tab switching, and for the same reason: a key that works in
+        // some tools and not others is one more thing to remember.
+        for tool in [ToolId::Scratchpad, ToolId::Calculator, ToolId::Clipboard] {
+            let mut app = App::new();
+            app.active = tool;
+            app.on_key(alt('-'), 0);
+            assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Down)], "{tool:?}");
+        }
+        let mut app = App::new();
+        app.on_key(alt('/'), 0);
+        app.pending.clear();
+        app.on_key(alt('-'), 0);
+        assert_eq!(app.pending, vec![Request::NudgeOpacity(Nudge::Down)]);
+        assert!(app.help, "and it does not close the page out from under you");
+    }
+
+    #[test]
+    fn a_bare_minus_is_still_a_minus() {
+        // The trap this whole keymap is arranged around. `-` in the Scratchpad
+        // is a character, and in the Calculator it is subtraction.
+        let mut app = App::new();
+        app.scratchpad.on_key(KeyPress::ch('i'));
+        app.on_key(KeyPress::ch('-'), 0);
+        assert_eq!(app.scratchpad.text(), "-");
+        assert!(app.pending.is_empty(), "no opacity change from a typed minus");
+
+        let mut app = App::new();
+        app.active = ToolId::Calculator;
+        for c in "9-4".chars() {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        app.on_key(KeyPress::plain(Key::Enter), 0);
+        assert_eq!(app.calculator.ans, Some(5.0), "the minus was subtraction");
+    }
+
+    #[test]
+    fn the_core_asks_for_a_direction_and_not_an_amount() {
+        // `dropkick-core` has no idea how solid the panel is, what a step is,
+        // or where the number lives. It cannot see a panel to decide any of
+        // that, so it says which way and stops.
+        let mut app = App::new();
+        app.on_key(alt('-'), 0);
+        match app.pending.first() {
+            Some(Request::NudgeOpacity(_)) => {}
+            other => panic!("expected a direction, got {other:?}"),
+        }
     }
 
     #[test]
