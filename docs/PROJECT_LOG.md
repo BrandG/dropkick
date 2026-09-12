@@ -2189,6 +2189,55 @@ There is a test that reads this file's own source and fails if
 `stepped_opacity` ever grows a `write` or `save` — crude, but the property is
 "this stays pure", and that is not otherwise observable from outside.
 
+## E IN THE SCRATCHPAD — 2026-08-25 (user)
+
+The third word motion, and the one where getting it wrong is invisible.
+
+### Measured against real vim, not recalled
+
+When this was logged as a possible next step I wrote that `e` probably skips
+blank lines where `w` stops on them, and said explicitly that I would want it
+checked against real vi before building it in. So it was. `vim -u NONE -es`
+is on this machine and answers questions like this in a second:
+
+| asked | vim said |
+|---|---|
+| `e` over `one` / blank / `two` | line 1 → **line 3**; the blank is skipped |
+| `w` over the same | line 2; `w` **does** stop on it |
+| `de` on `the quick brown` at col 0 | ` quick brown` — the space survives |
+| `dw` on the same | `quick brown` — the space goes |
+| `e` then `de` on the same | `th brown` |
+| `de` on the last word of a line | stops at the line end, does **not** join |
+| `e` on `foo.bar baz` | cols 2, 3, 6 — same three character classes |
+
+Every expected value in the new tests came from that table. All eight passed
+on the first run, which is the argument for measuring: the same eight written
+from memory would have had at least the blank-line one wrong.
+
+### Inclusive, where w is exclusive
+
+`dw` takes the word *and the gap after it*; `de` takes the word and leaves the
+spacing alone. That difference is the entire reason vi has both keys, and it
+is one line in `operator_span`: `hi` is the target itself rather than the
+character before it.
+
+Getting it backwards would leave the last letter of the word behind — a
+one-character bug that reads as a typo rather than a motion error, which is
+exactly the failure that function's "do not derive these" comment is about.
+
+`de` stops at the end of a line rather than joining, same as `dw`. Also
+measured; vim does the same.
+
+### The help row was free
+
+The Scratchpad table was already 15 rows against a 13-row window, so it
+already scrolled and a sixteenth cost nothing. Two commits ago this would have
+forced another merge. That is the scrolling work paying off in the way it was
+meant to.
+
+`ge` — end of the *previous* word — was left out. Rare even among vi users,
+and a fourth motion to explain.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

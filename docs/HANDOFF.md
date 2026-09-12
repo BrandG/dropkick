@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-25
 
-**All seven tools built.** 404 tests, clippy clean at zero warnings.
+**All seven tools built.** 412 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -164,9 +164,16 @@ and the last row draws under the hint row, where scrolling can never reach it.
 Tables longer than this scroll; the global column never does, and a test keeps
 it short enough not to need to.
 
-**Word motions are exclusive; most of the others are not.** `dw` stops *at* the
-next word rather than taking it, so `operator_span` ends the span one character
-before `motion_target` says. `dw` also never joins lines — vi's own special
+**`w`/`b` are exclusive and `e` is inclusive, and that is the whole reason
+both exist.** `dw` stops *at* the next word, so `operator_span` ends one
+character before `motion_target` says; `de` ends *on* the target. `dw` leaves
+`quick brown`, `de` leaves ` quick brown`. Get it backwards and `de` strands
+the last letter — a one-character bug that reads as a typo, not a motion error.
+
+`e` also **skips blank lines where `w` stops on them**, since an empty line has
+no word to be at the end of. That asymmetry is real vi behaviour, measured
+against `vim -u NONE -es` rather than recalled — do the same before changing
+any of it. `dw` also never joins lines — vi's own special
 case, and without it `dw` on the last word of a line silently pulls the next
 line up. Every arm of `operator_span` is written out for this reason; do not
 try to derive them.
@@ -233,6 +240,24 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   testable against published vectors. **Decided: the input is the current
   clipboard contents**, so it needs no new UI beyond a third kind alongside
   `p` and `u`.
+- **Repeating calendar entries, and alarms for them** — deliberately left out.
+  An entry with a time is inert; nothing notifies. The Timer already knows how
+  to raise a notification, so wiring one to a calendar entry is small; recurrence
+  is not, and should not be started casually.
+- **Clickable notifications, and encrypted pinned clipboard entries** — both
+  were blocked on D-Bus signal support, which the eyedropper has now added.
+  `Bus::pick_color` is the worked example: install the match rule *before* the
+  call, then read until the signal arrives.
+- **The eyedropper, for real** (`alt+u`) — deferred to a later point release,
+  not abandoned. The portal route is written and switched off because COSMIC
+  refuses `PickColor`; see the log for the traced exchange. The route that would
+  actually work here is native: cosmic-comp exports
+  `ext_image_copy_capture_manager_v1`, and Dropkick already speaks Wayland, so
+  capturing the screen and reading the pixel under the cursor needs no D-Bus and
+  no dependency — the same call as hand-rolling the D-Bus client rather than
+  taking one. Real work: the capture protocol, a full-screen picker surface, and
+  cursor handling. Turning the existing portal path back on is one field
+  (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
 - **Repeating calendar entries, and alarms for them** — deliberately left out.
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence

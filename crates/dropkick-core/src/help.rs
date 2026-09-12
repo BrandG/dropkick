@@ -70,6 +70,7 @@ const SCRATCHPAD: &[Row] = &[
     row("o  O", "open a line below, above", &['o', 'O']),
     row("h j k l", "move (arrows work too)", &['h', 'j', 'k', 'l']),
     row("w  b", "word forward, word back", &['w', 'b']),
+    row("e", "end of the word", &['e']),
     row("0  $", "start, end of the line", &['0', '$']),
     row("gg  G", "first line, last line", &['G']),
     row("v  V", "select, select whole lines", &['v', 'V']),

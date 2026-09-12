@@ -50,6 +50,7 @@ enum Motion {
     LastLine,
     WordForward,
     WordBack,
+    WordEnd,
     /// The doubled operator — the `dd` in `dd`, the `yy` in `yy`.
     WholeLine,
 }
@@ -306,6 +307,7 @@ impl Scratchpad {
             Motion::LastLine => Some((last, 0)),
             Motion::WordForward => self.word_forward(),
             Motion::WordBack => self.word_back(),
+            Motion::WordEnd => self.word_end(),
             Motion::WholeLine => Some((self.cy, self.cx)),
         }
     }
@@ -346,6 +348,49 @@ impl Scratchpad {
             }
             return Some((y, x));
         }
+    }
+
+    /// One character on, wrapping to the next line. `None` at the very end of
+    /// the buffer.
+    fn step_forward(&self, y: usize, x: usize) -> Option<(usize, usize)> {
+        if x + 1 < self.lines[y].chars().count() {
+            Some((y, x + 1))
+        } else if y + 1 < self.lines.len() {
+            Some((y + 1, 0))
+        } else {
+            None
+        }
+    }
+
+    /// The end of the word the cursor is in, or of the next one if it is
+    /// already there.
+    ///
+    /// **Blank lines are skipped**, which is the asymmetry with
+    /// [`Self::word_forward`]: `w` stops on an empty line because a paragraph
+    /// break is usually what you were aiming for, and `e` cannot, because an
+    /// empty line has no word to be at the end of. Checked against vim rather
+    /// than remembered — `e` over `one / <blank> / two` lands on line three.
+    fn word_end(&self) -> Option<(usize, usize)> {
+        // Always at least one character on, so `e` sitting on a word end goes
+        // to the end of the next word rather than staying put.
+        let (mut y, mut x) = self.step_forward(self.cy, self.cx)?;
+
+        // Then over whitespace, and over whole empty lines.
+        loop {
+            let chars: Vec<char> = self.lines[y].chars().collect();
+            match chars.get(x) {
+                Some(&c) if class(c) != Class::Space => break,
+                _ => (y, x) = self.step_forward(y, x)?,
+            }
+        }
+
+        // Then to the last character of the run we landed in.
+        let chars: Vec<char> = self.lines[y].chars().collect();
+        let run = class(chars[x]);
+        while x + 1 < chars.len() && class(chars[x + 1]) == run {
+            x += 1;
+        }
+        Some((y, x))
     }
 
     /// The start of the word before the cursor, crossing lines.
@@ -467,6 +512,28 @@ impl Scratchpad {
                     hi: (self.cy, tx - 1),
                     linewise: false,
                 })
+            }
+            // **Inclusive**, where `w` is exclusive -- and that difference is
+            // the entire reason both keys exist. `dw` takes the word and the
+            // space after it; `de` takes the word and leaves the spacing
+            // alone, which is what you want when you are about to retype it.
+            //
+            // Measured, not recalled: in vim, `de` on `the quick brown` from
+            // column zero leaves ` quick brown`, space and all, where `dw`
+            // leaves `quick brown`.
+            //
+            // Like `dw`, it stops at the end of the line rather than joining
+            // -- also measured, and also what vim does.
+            Motion::WordEnd => {
+                let (ty, tx) = self.motion_target(m)?;
+                if ty != self.cy {
+                    return (self.line_len() > 0).then(|| Span {
+                        lo: cur,
+                        hi: (self.cy, self.line_len() - 1),
+                        linewise: false,
+                    });
+                }
+                (tx >= self.cx).then_some(Span { lo: cur, hi: (self.cy, tx), linewise: false })
             }
             // Also exclusive, and also kept on one line. vi's `db` at column
             // zero reaches back into the previous line; that is rare, it is
@@ -779,6 +846,7 @@ impl Scratchpad {
             Key::Char('G') => Motion::LastLine,
             Key::Char('w') => Motion::WordForward,
             Key::Char('b') => Motion::WordBack,
+            Key::Char('e') => Motion::WordEnd,
             _ => return None,
         })
     }
@@ -1093,6 +1161,89 @@ mod tests {
         let mut n = at(&["one"], 0, 2);
         n.on_key(KeyPress::ch('w'));
         assert_eq!((n.cy, n.cx), (0, 2), "nothing after the end");
+    }
+
+    // The `e` tests below have their expected values taken from real vim
+    // (`vim -u NONE -es`), not from memory. Every one of them was run there
+    // first; see the log for the session.
+
+    #[test]
+    fn e_goes_to_the_end_of_the_word() {
+        let mut n = at(&["the quick"], 0, 0);
+        n.on_key(KeyPress::ch('e'));
+        assert_eq!((n.cy, n.cx), (0, 2), "the `e` of `the`");
+        n.on_key(KeyPress::ch('e'));
+        assert_eq!((n.cy, n.cx), (0, 8), "and on to the `k` of `quick`");
+    }
+
+    #[test]
+    fn e_stops_at_punctuation_like_w_does() {
+        let mut n = at(&["foo.bar baz"], 0, 0);
+        for expect in [2, 3, 6] {
+            n.on_key(KeyPress::ch('e'));
+            assert_eq!(n.cx, expect);
+        }
+    }
+
+    #[test]
+    fn e_skips_a_blank_line_where_w_stops_on_one() {
+        // The asymmetry, and the reason it is not a bug: an empty line has no
+        // word to be at the end of. vim agrees -- `e` over one/blank/two
+        // lands on line three.
+        let mut n = at(&["one", "", "two"], 0, 0);
+        n.on_key(KeyPress::ch('e'));
+        assert_eq!((n.cy, n.cx), (0, 2));
+        n.on_key(KeyPress::ch('e'));
+        assert_eq!((n.cy, n.cx), (2, 2), "past the blank line entirely");
+
+        let mut n = at(&["one", "", "two"], 0, 0);
+        n.on_key(KeyPress::ch('w'));
+        assert_eq!((n.cy, n.cx), (1, 0), "`w` still stops on it");
+    }
+
+    #[test]
+    fn de_leaves_the_spacing_alone_where_dw_eats_it() {
+        // The entire reason both keys exist.
+        let mut n = at(&["the quick brown"], 0, 0);
+        type_str(&mut n, "de");
+        assert_eq!(n.text(), " quick brown", "the space survives");
+
+        let mut n = at(&["the quick brown"], 0, 0);
+        type_str(&mut n, "dw");
+        assert_eq!(n.text(), "quick brown", "and here it does not");
+    }
+
+    #[test]
+    fn de_from_a_word_end_takes_through_the_next_word() {
+        // `e` then `de` on `the quick brown` leaves `th brown` in vim: the
+        // first `e` parks on the `e` of `the`, and `de` runs from there
+        // through the `k` of `quick`.
+        let mut n = at(&["the quick brown"], 0, 0);
+        type_str(&mut n, "ede");
+        assert_eq!(n.text(), "th brown");
+    }
+
+    #[test]
+    fn de_on_the_last_word_of_a_line_does_not_join_the_lines() {
+        let mut n = at(&["one two", "three"], 0, 4);
+        type_str(&mut n, "de");
+        assert_eq!(n.text(), "one \nthree");
+    }
+
+    #[test]
+    fn e_at_the_very_end_of_the_buffer_does_nothing() {
+        let mut n = at(&["one"], 0, 2);
+        n.on_key(KeyPress::ch('e'));
+        assert_eq!((n.cy, n.cx), (0, 2));
+    }
+
+    #[test]
+    fn e_extends_a_selection_inclusively() {
+        // `ve` covers the whole word, where `vw` stops one short of the next.
+        let mut n = at(&["the quick"], 0, 0);
+        type_str(&mut n, "ve");
+        let s = n.selection().unwrap();
+        assert_eq!((s.lo, s.hi), ((0, 0), (0, 2)));
     }
 
     #[test]

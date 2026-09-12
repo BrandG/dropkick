@@ -398,24 +398,30 @@ for you is usually enough. Turn on `timer.show_panel` if you want an alarm that
 is unmissable rather than merely patient.
 
 Scratchpad is vi-flavoured without being a vi clone. `i` `a` `A` `o` `O` enter
-insert mode and `Esc` leaves it; `hjkl` `w` `b` `0` `$` `gg` `G` move; `x` cuts a
-character and `u` undoes.
+insert mode and `Esc` leaves it; `hjkl` `w` `b` `e` `0` `$` `gg` `G` move; `x`
+cuts a character and `u` undoes.
 
-`w` and `b` are vi's words, not whitespace-delimited ones, so `w` in `foo.bar`
-stops at the dot. They cross lines, and they stop on a blank line, since a
-paragraph break is usually what you were aiming for.
+`w`, `b` and `e` are vi's words, not whitespace-delimited ones, so `w` in
+`foo.bar` stops at the dot. They cross lines. `w` and `b` stop on a blank line,
+since a paragraph break is usually what you were aiming for; `e` skips them,
+because an empty line has no word to be at the end of.
 
 Selection and the operators follow vi, so if you know vi you already know them:
 `v` selects by character and `V` by line, `d` and `y` cut and copy either a
 selection or a motion — `dd`, `yy`, `dw`, `dG`, `ggdG` to wipe the lot. `Esc`
 unwinds one level at a time: selection, then mode, then the panel.
 
-`dw` is exclusive and never joins lines, both as vi has them: it takes the word
-you are on and stops at the next one, and on the last word of a line it stops
-at the end of the line rather than pulling the next line up. `db` at the very
-start of a line does nothing — vi would reach back into the previous line, and
-of the two ways to be wrong about that, stopping is the one that cannot eat
-something you were not looking at.
+**`dw` and `de` differ in the space, which is why both keys exist.** On `the
+quick brown`, `dw` leaves `quick brown` and `de` leaves ` quick brown` — `dw`
+takes the word and the gap after it, `de` takes the word and leaves the
+spacing where it was. `de` is the one you want when you are about to retype
+the word in place.
+
+Neither joins lines: on the last word of a line they stop at the end of it
+rather than pulling the next line up. `db` at the very start of a line does
+nothing — vi would reach back into the previous line, and of the two ways to
+be wrong about that, stopping is the one that cannot eat something you were
+not looking at.
 
 Pasting works either way round: `p` and `P` in command mode, as vi has them, and
 **`Ctrl+V` in insert mode**, where everyone else's fingers go. It pastes whatever
