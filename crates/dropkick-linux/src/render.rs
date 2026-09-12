@@ -605,6 +605,32 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The "what was hashed" line: how much text, and the start of it.
+///
+/// Both halves earn their place. The **count** is what catches a trailing
+/// newline — the single most common reason a checksum does not match, and
+/// completely invisible in a preview. The **preview** is what catches having
+/// copied the wrong thing entirely.
+///
+/// Deliberately short. This is a tool that does not show clipboard contents
+/// without being asked, and a full dump of what you hashed would be exactly
+/// that by another route.
+fn hashed_from(src: &str) -> String {
+    const PREVIEW: usize = 32;
+    let chars = src.chars().count();
+    let unit = if chars == 1 { "character" } else { "characters" };
+
+    // Control characters would draw as blanks or nothing at all, which would
+    // make a preview that quietly lies about what it hashed.
+    let shown: String = src
+        .chars()
+        .take(PREVIEW)
+        .map(|c| if c.is_control() { '·' } else { c })
+        .collect();
+    let ellipsis = if chars > PREVIEW { "…" } else { "" };
+    format!("{chars} {unit} of \"{shown}{ellipsis}\"")
+}
+
 /// The help page: the active tool's keys on the left, the ones that work
 /// everywhere on the right.
 ///
@@ -959,7 +985,11 @@ fn draw_generate(
         let x = (canvas.w as f32 - text.width_of(problem)) / 2.0;
         text.draw(canvas, x, value_y, problem, ERR);
     } else if g.value.is_empty() {
-        let msg = "press r for a new one";
+        let msg = if g.kind == Kind::Hash {
+            "press h to hash the clipboard"
+        } else {
+            "press r for a new one"
+        };
         let x = (canvas.w as f32 - text.width_of(msg)) / 2.0;
         text.draw(canvas, x, value_y, msg, FAINT);
     } else {
@@ -972,11 +1002,23 @@ fn draw_generate(
 
     // What it is, above.
     let title = match g.kind {
-        Kind::Password => "password",
-        Kind::Uuid => "UUID v4",
+        Kind::Password => "password".to_string(),
+        Kind::Uuid => "UUID v4".to_string(),
+        Kind::Hash => g.algo.name().to_string(),
     };
-    let tx = (canvas.w as f32 - text.width_of(title)) / 2.0;
-    text.draw(canvas, tx, top as f32 + lh * 1.6, title, DIM);
+    let tx = (canvas.w as f32 - text.width_of(&title)) / 2.0;
+    text.draw(canvas, tx, top as f32 + lh * 1.6, &title, DIM);
+
+    // What was hashed, under the title. A digest on its own is unverifiable:
+    // a trailing newline changes it completely and the wrong answer looks
+    // exactly as plausible as the right one.
+    if g.kind == Kind::Hash {
+        if let Some(src) = &g.source {
+            let line = hashed_from(src);
+            let x = (canvas.w as f32 - text.width_of(&line)) / 2.0;
+            text.draw(canvas, x.max(PAD), top as f32 + lh * 3.0, &line, FAINT);
+        }
+    }
 
     // The settings, below, spelled out rather than shown as toggles: the state
     // of the thing on screen should be readable without knowing the keymap.
@@ -1001,6 +1043,16 @@ fn draw_generate(
         let line = parts.join("   ");
         let sx = (canvas.w as f32 - text.width_of(&line)) / 2.0;
         text.draw(canvas, sx, y, &line, DIM);
+        y += lh * 1.6;
+    } else if g.kind == Kind::Hash {
+        // The caution, on the two that have one. Drawn in the error colour
+        // because it is the one thing on this panel somebody could come to
+        // harm by not reading -- and only on the algorithms it applies to,
+        // since a warning that is always there is a warning nobody sees.
+        if let Some(caution) = g.algo.caution() {
+            let cx = (canvas.w as f32 - text.width_of(caution)) / 2.0;
+            text.draw(canvas, cx.max(PAD), y, caution, ERR);
+        }
         y += lh * 1.6;
     } else {
         y += lh * 0.6;
@@ -1085,6 +1137,7 @@ fn draw_hints(app: &App, text: &mut TextRenderer, canvas: &mut Canvas) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dropkick_core::hash::Algo;
 
     fn alpha_at(buf: &[u8], w: i32, x: i32, y: i32) -> u8 {
         buf[((y * w + x) * 4 + 3) as usize]
@@ -1166,6 +1219,78 @@ mod tests {
         // rather than a number someone rounded down and forgot.
         let over = help_row_y(lh, top, help::VISIBLE_ROWS);
         assert!(over > floor, "there is room for more than VISIBLE_ROWS; raise it");
+    }
+
+    /// The line that makes a digest verifiable. A trailing newline changes a
+    /// hash completely and is invisible in a preview, so the count is not
+    /// decoration.
+    #[test]
+    fn the_hashed_from_line_shows_the_length_and_the_start() {
+        assert_eq!(hashed_from("abc"), "3 characters of \"abc\"");
+        assert_eq!(hashed_from("x"), "1 character of \"x\"");
+        // The case this is for: same visible text, different hash.
+        assert_eq!(hashed_from("abc\n"), "4 characters of \"abc·\"");
+    }
+
+    #[test]
+    fn a_long_clipboard_is_previewed_not_dumped() {
+        let line = hashed_from(&"a".repeat(500));
+        assert!(line.starts_with("500 characters of"));
+        assert!(line.contains('…'), "it says there is more: {line}");
+        assert!(line.chars().count() < 60, "not a dump: {line}");
+    }
+
+    #[test]
+    fn control_characters_in_a_preview_are_made_visible() {
+        // A tab or a newline drawn as itself would be a preview that lies
+        // about what was hashed.
+        let line = hashed_from("a\tb\rc");
+        assert!(!line.contains('\t') && !line.contains('\r'), "{line}");
+        assert_eq!(line, "5 characters of \"a·b·c\"");
+    }
+
+    /// The caution is the one thing on that panel somebody could come to harm
+    /// by not reading, so it must not be drawn off the edge — which is
+    /// exactly what happened to the calculator's error line once.
+    #[test]
+    fn the_hash_cautions_fit_inside_the_panel() {
+        let text = match TextRenderer::new(16.0) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        for algo in [Algo::Sha256, Algo::Sha1, Algo::Md5] {
+            if let Some(caution) = algo.caution() {
+                let w = text.width_of(caution);
+                assert!(
+                    w <= WIDTH as f32 - PAD * 2.0,
+                    "{} caution is {w}px, panel is {}px",
+                    algo.name(),
+                    WIDTH
+                );
+            }
+        }
+    }
+
+    /// A digest has to be readable, which is the entire point of it being on
+    /// screen. SHA-256 is the long one at 64 hex characters.
+    #[test]
+    fn a_sha256_digest_fits_on_one_line() {
+        let big = match TextRenderer::new(34.0) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let text = match TextRenderer::new(16.0) {
+            Ok(t) => t,
+            Err(_) => return,
+        };
+        let digest = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+        let avail = WIDTH as f32 - PAD * 4.0;
+        // The renderer falls back to the small font when the big one will not
+        // fit; what must never happen is neither fitting.
+        assert!(
+            big.width_of(digest) <= avail || text.width_of(digest) <= avail,
+            "a sha-256 digest fits in neither font"
+        );
     }
 
     /// The global column is never scrolled, so it has to fit outright.

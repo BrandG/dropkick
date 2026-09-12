@@ -2238,6 +2238,89 @@ meant to.
 `ge` — end of the *previous* word — was left out. Rare even among vi users,
 and a fourth motion to explain.
 
+## HASHES IN GENERATE — 2026-08-25 (user)
+
+The deferred half of Generate, built. The input decision was made when the
+tool was: **the clipboard**, not a text field.
+
+That still holds, and for a better reason than it was originally given. Every
+key in Generate is a command — there is no text input anywhere in it. Adding
+one means a mode, a cursor and a second grammar in a tool that has none. And
+the thing you want to hash is nearly always already copied, because that is
+how it reached you.
+
+### All three, and the broken ones say so
+
+The user asked for SHA-256, SHA-1 and MD5, with a warning on the broken pair.
+Right call. The common reason to hash something off a clipboard is checking it
+against a checksum somebody published, and publishers still use MD5 and SHA-1
+— for *that*, SHA-256 is not an answer at all. For deciding whether to trust
+something, they are worthless.
+
+So both are here and both carry a line under the digest, in the error colour:
+`md5 is badly broken: fine for checking a download, never for security`.
+Only on the algorithms it applies to — a warning that is always on screen is a
+warning nobody reads. `Algo::caution()` returns `None` for SHA-256.
+
+`h` enters hashing and steps through them, SHA-256 first, because the first
+press of a key should not hand anyone a broken algorithm.
+
+### Hand-rolled, which is only safe because of the vectors
+
+~250 lines, no dependencies, as the zero-dependency rule requires. That is
+affordable precisely because hashes are the best-specified code there is:
+"did I transcribe sixty-four constants correctly" is a question the test suite
+answers rather than a thing to worry about.
+
+Every published vector is in the tests, plus a million-byte message — which is
+where a length-encoding mistake shows and a three-byte one does not — and the
+55/56/63/64/65-byte block seam. **The 56-byte case is pinned to `md5sum`,
+`sha1sum` and `sha256sum` output rather than to this code's**, so it is checked
+against something somebody else wrote.
+
+**MD5 is little-endian where SHA is big-endian.** That is one flag in
+`padded`, and getting it backwards produces a confident wrong answer that looks
+entirely reasonable.
+
+After building, the rendered panel's digests were compared against `sha256sum`
+and `md5sum` for the same input. They match — which tests the whole path, keys
+through clipboard through renderer, not just the arithmetic.
+
+### The part that mattered most: showing what was hashed
+
+A bare 64-character digest is unverifiable. A trailing newline changes it
+completely, the wrong answer looks exactly as plausible as the right one, and
+that is the single most common reason a checksum "does not match".
+
+So every digest sits under `8 characters of "0x6FB3F2"`. The **count** catches
+the invisible whitespace; the **preview** catches having copied the wrong thing
+entirely. Control characters render as `·`, so the preview cannot quietly lie
+about what it hashed.
+
+Deliberately short — 32 characters. This is a program whose Clipboard tool
+masks itself on arrival; a full dump of what you hashed would undo that by
+another route.
+
+### Smaller decisions
+
+- **A digest is copied ordinarily, not as a secret.** It is computed from text
+  already in clipboard history, so hiding the hash while its input sits in the
+  list above would be theatre. Needed a new `Outcome::Copy` beside
+  `CopySecret`, kept as separate variants so a call site cannot leak one by
+  forgetting.
+- **`source` is cleared on leaving the tool.** Generate promises it stores
+  nothing; holding a copy of someone's clipboard in the one tool that masks
+  nothing would quietly break that.
+- **`r` re-reads the clipboard** rather than re-hashing the old text. A hash
+  tool that shows you a digest of what you copied ten minutes ago is worse
+  than useless.
+- **Empty clipboard, or capture paused, says so.** The empty string has a
+  perfectly good SHA-256 and showing it would be a confident answer to a
+  question nobody asked.
+- The password-only keys (`x`, `+`, `-`, the class toggles) were already gated
+  on `Kind::Password`, so they stay out of the way. There is a test holding
+  that, since `h` sits next to them in the same match.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

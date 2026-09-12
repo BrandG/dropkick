@@ -119,7 +119,9 @@ const TIMER: &[Row] = &[
 
 const GENERATE: &[Row] = &[
     row("p  u", "password, or uuid", &['p', 'u']),
-    row("r  space", "make another", &['r', ' ']),
+    row("h", "hash the clipboard", &['h']),
+    row("h again", "sha-256, sha-1, md5", &[]),
+    row("r  space", "make another, or re-read", &['r', ' ']),
     row("y  enter", "copy it", &['y']),
     row("a  A  0  !", "which characters to use", &['a', 'A', '0', '!']),
     row("x", "drop lookalikes: l 1 I O 0", &['x']),
@@ -197,6 +199,8 @@ mod tests {
         let mut app = App::new();
         app.active = tool;
         if tool == ToolId::Generate {
+            // `h` hashes the clipboard, so there has to be one.
+            app.clipboard.record("something to hash", &[]);
             // The pool starts dry -- the platform fills it -- and `y` copies
             // nothing when nothing has been generated. That is the tool being
             // right, not the help being wrong, so the probe gets a real tool

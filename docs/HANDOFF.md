@@ -16,7 +16,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-08-25
 
-**All seven tools built.** 412 tests, clippy clean at zero warnings.
+**All seven tools built.** 433 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
@@ -25,7 +25,7 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 | `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
-| `alt+y` | Generate | built — passwords + UUIDs; hashes deferred, input is the clipboard |
+| `alt+y` | Generate | built — passwords, UUIDs, and sha-256/sha-1/md5 of the clipboard |
 | `alt+u` | Color | built — hex/rgb/hsl/names; eyedropper written but **switched off**, COSMIC refuses it |
 | `alt+i/o/p` | — | deliberately unspent |
 | `alt+/` | Help | built — an overlay, not a tool; the active tool's keys plus the global ones |
@@ -146,6 +146,22 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**`hash.rs` is hand-rolled, and that is only safe because of the vectors.**
+Three algorithms, no dependencies, ~250 lines. Every one has published test
+vectors and they are all in the tests, plus a million-byte message (which is
+where a length-encoding mistake shows) and the 56-byte case checked against
+coreutils rather than against this code. **MD5 is little-endian where SHA is
+big-endian** — get that backwards and you get a confident wrong answer that
+looks entirely reasonable, which is the whole reason `padded` takes a flag and
+the vectors are not optional.
+
+**A digest without its input is unverifiable.** The panel shows
+`8 characters of "0x6FB3F2"` above every hash. The count is not decoration: a
+trailing newline changes a digest completely, is invisible in a preview, and is
+the most common reason a checksum does not match. `hashed_from` in `render.rs`
+also replaces control characters with `·`, so the preview cannot lie about what
+it hashed.
+
 **The opacity floor is load-bearing, and it is checked in three places.**
 `config::OPACITY_MIN` is 20 and the bounds live with the setting, because
 there are two ways in — the file at startup and `Alt+-` while running — and a
@@ -235,11 +251,6 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
 
 ## What is next, and what each needs
 
-- **Hashes in Generate** (`alt+y`) — the deferred half. Needs a from-scratch
-  SHA-256 in core, since it has zero dependencies and keeps them: ~80 lines,
-  testable against published vectors. **Decided: the input is the current
-  clipboard contents**, so it needs no new UI beyond a third kind alongside
-  `p` and `u`.
 - **Repeating calendar entries, and alarms for them** — deliberately left out.
   An entry with a time is inert; nothing notifies. The Timer already knows how
   to raise a notification, so wiring one to a calendar entry is small; recurrence

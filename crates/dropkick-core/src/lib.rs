@@ -22,6 +22,7 @@ pub mod color;
 pub mod config;
 pub mod date;
 pub mod generate;
+pub mod hash;
 pub mod help;
 pub mod key;
 pub mod scratchpad;

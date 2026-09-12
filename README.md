@@ -439,9 +439,29 @@ Undo is per *burst*, not per character, so one `u` takes back a whole typing run
 — which is also what makes a keystroke that landed before you saw the panel
 recoverable.
 
-Generate makes passwords and UUIDs. `p` and `u` pick which; for a password, `a`
-`A` `0` `!` toggle the character types, `x` leaves out the lookalikes (`l I 1 O
-0`), `+` and `-` change the length, `r` makes a new one and `y` copies it.
+Generate makes passwords and UUIDs, and hashes what is on your clipboard. `p`
+and `u` pick which; for a password, `a` `A` `0` `!` toggle the character types,
+`x` leaves out the lookalikes (`l I 1 O 0`), `+` and `-` change the length, `r`
+makes a new one and `y` copies it.
+
+`h` hashes the clipboard — you copy text anywhere on the system, then press
+`Alt+Y` and `h`. Pressing `h` again steps through **SHA-256, SHA-1 and MD5**,
+and `r` re-reads the clipboard so the digest is always of what is on it now.
+
+It shows **what** it hashed, not just the digest: `8 characters of "0x6FB3F2"`.
+A digest on its own is unverifiable — a trailing newline changes it completely
+and the wrong answer looks exactly as plausible as the right one, which is the
+most common reason a checksum "doesn't match".
+
+**SHA-1 and MD5 are broken**, and the panel says so under the digest whenever
+one of them is selected. They are here because the usual reason to hash
+something from a clipboard is checking it against a checksum somebody
+published, and publishers still use both — that use is fine. Deciding whether
+to trust something is not.
+
+A digest is copied normally, unlike a password: it is computed from text that
+is already in your clipboard history, so hiding the hash while its input sits
+in the list above would be for show.
 
 **Nothing it generates is stored.** There is no history, and the value is gone
 when the panel closes. Copying a password does *not* put it in Dropkick's

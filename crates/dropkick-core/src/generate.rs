@@ -1,4 +1,4 @@
-//! Generate: passwords and UUIDs.
+//! Generate: passwords, UUIDs and hashes.
 //!
 //! **Nothing here is stored.** There is no history, no "last generated", and
 //! the value does not survive a summon — the panel comes back blank. That is
@@ -10,6 +10,7 @@
 //! against fixed bytes instead of "run it a lot and squint". The platform fills
 //! the pool from the OS; this module only spends it.
 
+use crate::hash::Algo;
 use crate::key::{Key, KeyPress};
 
 /// Characters excluded when "avoid lookalikes" is on. The set people actually
@@ -30,6 +31,13 @@ pub const MAX_LEN: usize = 128;
 pub enum Kind {
     Password,
     Uuid,
+    /// Hash whatever is on the clipboard.
+    ///
+    /// The odd one out: the other two invent something, this one is a
+    /// function of text that already exists. It is here anyway because it is
+    /// the same gesture — press a key, get a string, copy it — and a tool of
+    /// its own would spend one of the ten slots on it.
+    Hash,
 }
 
 /// What the tool wants the app to do about a key.
@@ -38,6 +46,12 @@ pub enum Outcome {
     /// Copy this to the clipboard *as a secret* — it must not be recorded in
     /// clipboard history, here or by anything else on the system.
     CopySecret(String),
+    /// Copy this ordinarily, history and all.
+    ///
+    /// A digest gets this rather than `CopySecret`: it is computed from
+    /// something that is already in clipboard history, so hiding the hash
+    /// while the text it came from sits in the list above would be theatre.
+    Copy(String),
     Redraw,
     Ignored,
 }
@@ -65,9 +79,19 @@ pub struct Generate {
     /// The value on screen. Empty until something is generated, and emptied
     /// again on summon.
     pub value: String,
-    /// Set when the alphabet is empty, so the panel can say why rather than
-    /// showing nothing and looking broken.
+    /// Set when the alphabet is empty, or when there is nothing on the
+    /// clipboard to hash, so the panel can say why rather than showing
+    /// nothing and looking broken.
     pub problem: Option<&'static str>,
+    /// Which hash `h` is currently on.
+    pub algo: Algo,
+    /// The text the digest on screen was computed from.
+    ///
+    /// Kept so the panel can show *what* was hashed. A bare 64-character
+    /// digest is unverifiable: a trailing newline changes it completely and
+    /// the wrong answer looks exactly as plausible as the right one, which is
+    /// the single most common reason a checksum "does not match".
+    pub source: Option<String>,
     /// Unspent random bytes. The platform tops this up; see [`Self::wants_entropy`].
     pool: Vec<u8>,
     /// True once a copy has happened, so the panel can say so.
@@ -83,6 +107,8 @@ impl Default for Generate {
             exclude_ambiguous: false,
             value: String::new(),
             problem: None,
+            algo: Algo::Sha256,
+            source: None,
             pool: Vec::new(),
             copied: false,
         }
@@ -163,7 +189,41 @@ impl Generate {
         match self.kind {
             Kind::Uuid => self.generate_uuid(),
             Kind::Password => self.generate_password(),
+            Kind::Hash => match &self.source {
+                Some(text) => self.value = self.algo.hex_of(text.as_bytes()),
+                None => self.problem = Some("nothing on the clipboard to hash"),
+            },
         }
+    }
+
+    /// What `h` does: switch to hashing, or step to the next algorithm if
+    /// already there.
+    ///
+    /// The clipboard is not read here — this module cannot reach one. The app
+    /// layer supplies it, the same arrangement as the Scratchpad's paste.
+    pub fn hash_key(&mut self) {
+        if self.kind == Kind::Hash {
+            self.algo = self.algo.next();
+        } else {
+            self.kind = Kind::Hash;
+        }
+        self.copied = false;
+        self.problem = None;
+        self.value.clear();
+    }
+
+    /// Hash this text, and remember it so the panel can say what was hashed.
+    pub fn supply_clipboard(&mut self, text: &str) {
+        self.source = Some(text.to_string());
+        self.regenerate();
+    }
+
+    /// There was nothing to hash, and why.
+    pub fn clipboard_unavailable(&mut self, why: &'static str) {
+        self.source = None;
+        self.value.clear();
+        self.copied = false;
+        self.problem = Some(why);
     }
 
     fn generate_password(&mut self) {
@@ -226,6 +286,10 @@ impl Generate {
         self.value.clear();
         self.problem = None;
         self.copied = false;
+        // The clipboard text goes too. Holding a copy of what someone hashed
+        // last time, in a tool that does not mask anything, is not worth the
+        // convenience of not pressing `h` again.
+        self.source = None;
     }
 
     pub fn on_key(&mut self, press: KeyPress) -> Outcome {
@@ -295,7 +359,11 @@ impl Generate {
                     return Outcome::Ignored;
                 }
                 self.copied = true;
-                Outcome::CopySecret(self.value.clone())
+                if self.kind == Kind::Hash {
+                    Outcome::Copy(self.value.clone())
+                } else {
+                    Outcome::CopySecret(self.value.clone())
+                }
             }
             _ => Outcome::Ignored,
         }

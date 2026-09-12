@@ -189,9 +189,12 @@ impl App {
                 }
             }
             ToolId::Generate => match self.generate.kind {
-                crate::generate::Kind::Uuid => "p password   r new   y copy   esc x",
+                crate::generate::Kind::Uuid => "p password   h hash   r new   y copy   esc x",
                 crate::generate::Kind::Password => {
                     "u uuid  a A 0 ! types  x lookalikes  +- length  r new  y copy"
+                }
+                crate::generate::Kind::Hash => {
+                    "h next hash   r re-read the clipboard   y copy   p password   esc x"
                 }
             },
             ToolId::Calendar => match self.calendar.mode {
@@ -269,7 +272,7 @@ impl App {
     /// clipboard is the quiet wrong answer this project keeps designing out.
     fn clipboard_text(&self) -> Result<String, &'static str> {
         if self.clipboard.capture_paused {
-            return Err("clipboard capture is paused, so there is nothing fresh to paste");
+            return Err("clipboard capture is paused - nothing fresh to read");
         }
         match self.clipboard.entries().first() {
             Some(e) => Ok(e.text.clone()),
@@ -524,22 +527,54 @@ impl App {
                     Response::Ignored
                 }
             }
-            ToolId::Generate => match self.generate.on_key(press) {
-                GenOutcome::CopySecret(text) => {
-                    self.pending.push(Request::SetClipboardSecret(text));
-                    // Say that it is not in the history, because the Clipboard
-                    // tab is right there and its absence would otherwise look
-                    // like a bug.
-                    self.notice = Some("copied - not saved to clipboard history".to_string());
-                    self.ask_for_entropy();
-                    Response::Redraw
+            ToolId::Generate => {
+                // Hashing reads the clipboard, which Generate cannot reach --
+                // the same arrangement as the Scratchpad's paste, and for the
+                // same reason: a tool that invents secrets has no business
+                // knowing how to read the system's.
+                //
+                // `h` switches to hashing or steps to the next algorithm; `r`
+                // and space re-read, so a digest is always of what is on the
+                // clipboard *now* rather than whatever was there when you
+                // arrived.
+                let hash_kind = self.generate.kind == crate::generate::Kind::Hash;
+                let rereads = press.mods.is_plain()
+                    && (press.key == Key::Char('h')
+                        || (hash_kind
+                            && matches!(press.key, Key::Char('r') | Key::Char(' '))));
+                if rereads {
+                    if press.key == Key::Char('h') {
+                        self.generate.hash_key();
+                    }
+                    match self.clipboard_text() {
+                        Ok(text) => self.generate.supply_clipboard(&text),
+                        Err(why) => self.generate.clipboard_unavailable(why),
+                    }
+                    return Response::Redraw;
                 }
-                GenOutcome::Redraw => {
-                    self.ask_for_entropy();
-                    Response::Redraw
+                match self.generate.on_key(press) {
+                    GenOutcome::CopySecret(text) => {
+                        self.pending.push(Request::SetClipboardSecret(text));
+                        // Say that it is not in the history, because the
+                        // Clipboard tab is right there and its absence would
+                        // otherwise look like a bug.
+                        self.notice =
+                            Some("copied - not saved to clipboard history".to_string());
+                        self.ask_for_entropy();
+                        Response::Redraw
+                    }
+                    GenOutcome::Copy(text) => {
+                        self.pending.push(Request::SetClipboard(text));
+                        self.notice = Some("copied".to_string());
+                        Response::Redraw
+                    }
+                    GenOutcome::Redraw => {
+                        self.ask_for_entropy();
+                        Response::Redraw
+                    }
+                    GenOutcome::Ignored => Response::Ignored,
                 }
-                GenOutcome::Ignored => Response::Ignored,
-            },
+            }
             ToolId::Clipboard => match self.clipboard.on_key(press) {
                 Outcome::Paste(text) => {
                     self.pending.push(Request::SetClipboard(text));
@@ -1190,6 +1225,128 @@ mod tests {
             Some(Request::NudgeOpacity(_)) => {}
             other => panic!("expected a direction, got {other:?}"),
         }
+    }
+
+    fn generate_with_clipboard(text: &str) -> App {
+        let mut app = App::new();
+        app.active = ToolId::Generate;
+        app.clipboard.record(text, &[]);
+        app
+    }
+
+    #[test]
+    fn h_hashes_whatever_is_on_the_clipboard() {
+        let mut app = generate_with_clipboard("abc");
+        assert_eq!(app.on_key(KeyPress::ch('h'), 0), Response::Redraw);
+        assert_eq!(app.generate.kind, crate::generate::Kind::Hash);
+        assert_eq!(
+            app.generate.value,
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
+    }
+
+    #[test]
+    fn h_again_walks_the_algorithms_and_comes_back_to_the_sound_one() {
+        let mut app = generate_with_clipboard("abc");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert_eq!(app.generate.algo, crate::hash::Algo::Sha256, "the safe one first");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert_eq!(app.generate.algo, crate::hash::Algo::Sha1);
+        assert_eq!(app.generate.value, "a9993e364706816aba3e25717850c26c9cd0d89d");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert_eq!(app.generate.algo, crate::hash::Algo::Md5);
+        assert_eq!(app.generate.value, "900150983cd24fb0d6963f7d28e17f72");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert_eq!(app.generate.algo, crate::hash::Algo::Sha256);
+    }
+
+    #[test]
+    fn r_re_reads_the_clipboard_rather_than_re_hashing_the_old_text() {
+        // The whole point of a hash tool is that it tells you about what is
+        // on the clipboard *now*.
+        let mut app = generate_with_clipboard("abc");
+        app.on_key(KeyPress::ch('h'), 0);
+        let first = app.generate.value.clone();
+        app.clipboard.record("something else entirely", &[]);
+        app.on_key(KeyPress::ch('r'), 0);
+        assert_ne!(app.generate.value, first, "it hashed the new clipboard");
+        assert_eq!(app.generate.source.as_deref(), Some("something else entirely"));
+    }
+
+    #[test]
+    fn hashing_an_empty_clipboard_says_so_rather_than_hashing_nothing() {
+        // The empty string has a perfectly good SHA-256, and showing it would
+        // be a confident answer to a question nobody asked.
+        let mut app = App::new();
+        app.active = ToolId::Generate;
+        app.on_key(KeyPress::ch('h'), 0);
+        assert!(app.generate.value.is_empty());
+        assert!(app.generate.problem.is_some(), "it has to say why");
+    }
+
+    #[test]
+    fn hashing_with_capture_paused_says_so_rather_than_hashing_something_stale() {
+        let mut app = generate_with_clipboard("abc");
+        app.clipboard.capture_paused = true;
+        app.on_key(KeyPress::ch('h'), 0);
+        assert!(app.generate.value.is_empty());
+        assert!(app.generate.problem.unwrap().contains("paused"));
+    }
+
+    #[test]
+    fn a_digest_is_copied_ordinarily_and_a_password_is_not() {
+        // A digest is computed from something already in clipboard history,
+        // so hiding it while its input sits in the list above is theatre.
+        let mut app = generate_with_clipboard("abc");
+        app.on_key(KeyPress::ch('h'), 0);
+        app.pending.clear();
+        app.on_key(KeyPress::ch('y'), 0);
+        assert!(matches!(app.pending.first(), Some(Request::SetClipboard(_))));
+
+        let mut app = App::new();
+        app.active = ToolId::Generate;
+        app.generate.supply_entropy(&vec![0x5A; 1024]);
+        app.on_key(KeyPress::ch('p'), 0);
+        app.pending.clear();
+        app.on_key(KeyPress::ch('y'), 0);
+        assert!(
+            matches!(app.pending.first(), Some(Request::SetClipboardSecret(_))),
+            "a password still never touches history"
+        );
+    }
+
+    #[test]
+    fn leaving_the_tool_forgets_the_clipboard_text_it_hashed() {
+        // Generate promises it stores nothing. Keeping a copy of someone's
+        // clipboard around, in the one tool that masks nothing, would quietly
+        // break that.
+        let mut app = generate_with_clipboard("a secret worth forgetting");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert!(app.generate.source.is_some());
+        app.on_key(alt('q'), 0);
+        assert_eq!(app.generate.source, None);
+        assert!(app.generate.value.is_empty());
+    }
+
+    #[test]
+    fn the_password_only_keys_stay_out_of_the_way_while_hashing() {
+        // `x`, `+`, `-` and the class toggles mean nothing to a digest. They
+        // are already gated on Password; this is the test that keeps them so.
+        let mut app = generate_with_clipboard("abc");
+        app.on_key(KeyPress::ch('h'), 0);
+        let digest = app.generate.value.clone();
+        for c in ['x', '+', '-', 'a', 'A', '0', '!'] {
+            app.on_key(KeyPress::ch(c), 0);
+        }
+        assert_eq!(app.generate.value, digest, "nothing disturbed the digest");
+        assert_eq!(app.generate.kind, crate::generate::Kind::Hash);
+    }
+
+    #[test]
+    fn the_hint_row_changes_with_the_kind() {
+        let mut app = generate_with_clipboard("abc");
+        app.on_key(KeyPress::ch('h'), 0);
+        assert!(app.hints().contains("hash"));
     }
 
     #[test]

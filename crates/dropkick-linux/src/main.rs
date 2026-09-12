@@ -1426,6 +1426,26 @@ everywhere.";
             }),
         ),
         (
+            "generate-hash",
+            Box::new(|app: &mut App| {
+                seed_clipboard(app);
+                app.on_key(KeyPress::alt('y'), 0);
+                app.on_key(KeyPress::ch('h'), 0);
+            }),
+        ),
+        (
+            "generate-hash-md5",
+            Box::new(|app: &mut App| {
+                // Two more presses to reach md5, which is the one carrying
+                // the loudest warning.
+                seed_clipboard(app);
+                app.on_key(KeyPress::alt('y'), 0);
+                for _ in 0..3 {
+                    app.on_key(KeyPress::ch('h'), 0);
+                }
+            }),
+        ),
+        (
             "opacity-nudged",
             Box::new(|app: &mut App| {
                 // Drives the real key path, so the notice is whatever a real
