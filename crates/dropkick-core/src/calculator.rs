@@ -9,7 +9,14 @@ use crate::key::{Key, KeyPress};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Entry {
     pub expr: String,
+    /// What is shown, ending in [`ELLIPSIS`] when digits were dropped.
     pub result: String,
+    /// What `Tab` pastes: the same answer with every digit, and any unit kept.
+    ///
+    /// Held per entry rather than recomputed from `ans`, because `ans` is a
+    /// bare number — it loses the unit on `25 ft in m`, and a date answer
+    /// never sets it at all.
+    pub full: String,
 }
 
 #[derive(Debug, Default)]
@@ -50,6 +57,23 @@ impl Calculator {
                 self.evaluate();
                 true
             }
+            // Tab pastes the last answer at the cursor, with every digit.
+            //
+            // Not the same as `ans`, and both earn their place. `ans` is a
+            // *reference*: late-bound, exact, and re-read when the line is
+            // evaluated. Tab is *text*: what you get is fixed the moment you
+            // press it, and you can edit it afterwards. Text is also the only
+            // form that carries a unit — `ans` after `25 ft in m` is a bare
+            // 7.62 — or a date, which never sets `ans` at all.
+            //
+            // It doubles as "show me the whole thing": when a result ends in
+            // an ellipsis, Tab is how you read the rest of it.
+            Key::Tab => {
+                let Some(last) = self.history.last() else { return false };
+                self.input.push_str(&last.full);
+                self.error = None;
+                true
+            }
             _ => false,
         }
     }
@@ -67,7 +91,7 @@ impl Calculator {
                 if let Some(v) = out.ans {
                     self.ans = Some(v);
                 }
-                self.history.push(Entry { expr, result: out.display });
+                self.history.push(Entry { expr, result: out.display, full: out.full });
                 self.input.clear();
                 self.error = None;
                 // The panel is small; old history is not worth the memory.
@@ -81,20 +105,131 @@ impl Calculator {
 }
 
 /// Render a float the way a person would write it.
-pub fn format_number(v: f64) -> String {
-    if !v.is_finite() {
-        return v.to_string();
+/// Marks a result that has more digits than are on screen. `Tab` is how you
+/// get them.
+pub const ELLIPSIS: &str = "…";
+
+/// Significant digits shown before the ellipsis appears.
+///
+/// Twelve, not ten *decimal places* — which is what this used to do, and it
+/// was wrong at both ends. Ten decimal places showed `1e-12` as **`0`**, a
+/// confident wrong answer for anything working in small units, and printed
+/// `123456789.123456789` as `123456789.123456791`, where the final digit is
+/// past what an f64 holds and is therefore invented.
+///
+/// Significant digits is the rule that fits the type: an f64 carries about 15
+/// to 17 of them, so twelve is comfortably inside what is real while staying
+/// short enough to read at a glance.
+const SHOWN_DIGITS: usize = 12;
+
+/// How far the displayed form may drift from the real value before it earns
+/// an ellipsis, as a relative difference.
+///
+/// Not zero, deliberately. `1 ft in in` computes to `12.000000000000002`, and
+/// an ellipsis on `12` would be technically true and practically useless — the
+/// extra digits are an artefact of binary floating point, not information
+/// anybody asked for. A few parts in 10^14 is comfortably above that noise and
+/// far below anything a person typed.
+const NOISE: f64 = 1e-14;
+
+/// Below this magnitude a plain decimal is mostly leading zeros, so it is
+/// shown in scientific notation instead. `0.000001` is readable;
+/// `0.000000000001` is a counting exercise.
+const SMALL: f64 = 1e-6;
+/// Above this, likewise — and it is also where f64 stops being able to
+/// represent consecutive integers.
+const LARGE: f64 = 1e15;
+
+/// A number in the two forms the panel needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Shown {
+    /// What goes on screen, ending in [`ELLIPSIS`] if digits were dropped.
+    pub display: String,
+    /// Every digit there is, for `Tab` to paste. Never has an ellipsis.
+    pub full: String,
+}
+
+fn scientific(mag: f64) -> bool {
+    mag != 0.0 && !(SMALL..LARGE).contains(&mag)
+}
+
+/// Round `v` to `digits` significant digits, with no trailing zero padding.
+fn to_significant(v: f64, digits: usize) -> String {
+    if v == 0.0 {
+        return "0".to_string();
     }
-    if v == v.trunc() && v.abs() < 1e15 {
-        return format!("{}", v as i64);
+    let mag = v.abs();
+    if scientific(mag) {
+        let s = format!("{:.*e}", digits.saturating_sub(1), v);
+        // Trim the mantissa's trailing zeros without touching the exponent.
+        return match s.split_once('e') {
+            Some((m, e)) if m.contains('.') => {
+                let m = m.trim_end_matches('0').trim_end_matches('.');
+                format!("{m}e{e}")
+            }
+            _ => s,
+        };
     }
-    let s = format!("{v:.10}");
-    let s = s.trim_end_matches('0').trim_end_matches('.').to_string();
-    if s.is_empty() {
-        "0".to_string()
+    // How many places after the point gives `digits` significant ones depends
+    // on where the point falls.
+    let exp = mag.log10().floor() as i32;
+    let places = (digits as i32 - 1 - exp).max(0) as usize;
+    let s = format!("{v:.places$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
     } else {
         s
     }
+}
+
+/// Every digit, and no more.
+///
+/// Rust's own float formatting gives the **shortest string that reads back as
+/// the same f64**, which is exactly the right definition of "the whole thing":
+/// `515.66` stays `515.66` rather than becoming `515.66000000000003`, and
+/// `sqrt(2)*3` gives all seventeen digits it genuinely has.
+fn full_form(v: f64) -> String {
+    if scientific(v.abs()) {
+        format!("{v:e}")
+    } else {
+        format!("{v}")
+    }
+}
+
+/// A number as it should appear, and as it should paste.
+pub fn format_shown(v: f64) -> Shown {
+    if !v.is_finite() {
+        let s = v.to_string();
+        return Shown { display: s.clone(), full: s };
+    }
+    // Whole numbers are shown whole. Above `LARGE` an f64 cannot represent
+    // every integer anyway, so those fall through to the general path.
+    if v == v.trunc() && v.abs() < LARGE {
+        let s = format!("{}", v as i64);
+        return Shown { display: s.clone(), full: s };
+    }
+
+    let full = full_form(v);
+    let short = to_significant(v, SHOWN_DIGITS);
+
+    // The ellipsis is earned, not assumed: it appears only when reading the
+    // short form back would give a meaningfully different number.
+    let lost = match short.parse::<f64>() {
+        Ok(back) => {
+            let scale = v.abs().max(f64::MIN_POSITIVE);
+            (back - v).abs() / scale > NOISE
+        }
+        // Unparsable should not happen; if it ever does, say so rather than
+        // claiming the display is complete.
+        Err(_) => true,
+    };
+    let display = if lost { format!("{short}{ELLIPSIS}") } else { short };
+    Shown { display, full }
+}
+
+/// The display form on its own, for callers that do not need both.
+pub fn format_number(v: f64) -> String {
+    format_shown(v).display
 }
 
 // --- units and dates -------------------------------------------------------
@@ -110,6 +245,8 @@ pub fn format_number(v: f64) -> String {
 pub struct Evaluated {
     /// What to show in the history.
     pub display: String,
+    /// The same, with every digit. Equal to `display` when nothing was cut.
+    pub full: String,
     /// What `ans` becomes, when the answer is a plain number. A date is not,
     /// so `ans` is left alone rather than being set to something meaningless.
     pub ans: Option<f64>,
@@ -166,7 +303,16 @@ fn try_conversion(input: &str, ans: Option<f64>) -> Option<Result<Evaluated, Str
     let value = if head.is_empty() { Ok(1.0) } else { eval(head, ans) };
     Some(value.and_then(|v| {
         crate::units::convert(v, from, to)
-            .map(|out| Evaluated { display: format!("{} {}", format_number(out), to), ans: Some(out) })
+            .map(|out| {
+                let n = format_shown(out);
+                Evaluated {
+                    display: format!("{} {}", n.display, to),
+                    // The unit rides along, which is the thing `ans` cannot
+                    // carry: `ans` after `25 ft in m` is a bare 7.62.
+                    full: format!("{} {}", n.full, to),
+                    ans: Some(out),
+                }
+            })
     }))
 }
 
@@ -221,7 +367,10 @@ fn try_date(input: &str, today: Option<crate::date::Date>) -> Option<Result<Eval
     let Some((at, op)) = op_at else {
         // No operator: a bare date reports its weekday.
         let d = parse_date_word(s, today)?;
-        return Some(Ok(Evaluated { display: show_date(d), ans: None }));
+        // A date is already whole: there is nothing more of it to show, so
+        // `full` is the same string and Tab pastes what you see.
+        let shown = show_date(d);
+        return Some(Ok(Evaluated { display: shown.clone(), full: shown, ans: None }));
     };
 
     let left = s[..at].trim();
@@ -236,8 +385,11 @@ fn try_date(input: &str, today: Option<crate::date::Date>) -> Option<Result<Eval
         if let Some(b) = parse_date_word(right, today) {
             let days = a.to_days() - b.to_days();
             let plural = if days.abs() == 1 { "day" } else { "days" };
+            // A whole number of days: nothing is ever cut from it.
+            let shown = format!("{days} {plural}");
             return Some(Ok(Evaluated {
-                display: format!("{days} {plural}"),
+                display: shown.clone(),
+                full: shown,
                 ans: Some(days as f64),
             }));
         }
@@ -256,7 +408,8 @@ fn try_date(input: &str, today: Option<crate::date::Date>) -> Option<Result<Eval
         "month" => a.add_months(n as i32),
         _ => a.add_months(n as i32 * 12),
     };
-    Some(Ok(Evaluated { display: show_date(out), ans: None }))
+    let shown = show_date(out);
+    Some(Ok(Evaluated { display: shown.clone(), full: shown, ans: None }))
 }
 
 /// Evaluate a line: a conversion, a date, or plain arithmetic, in that order.
@@ -271,7 +424,10 @@ pub fn evaluate_line(
     if let Some(r) = try_date(input, today) {
         return r;
     }
-    eval(input, ans).map(|v| Evaluated { display: format_number(v), ans: Some(v) })
+    eval(input, ans).map(|v| {
+        let n = format_shown(v);
+        Evaluated { display: n.display, full: n.full, ans: Some(v) }
+    })
 }
 
 // --- evaluator -------------------------------------------------------------
@@ -542,13 +698,19 @@ mod unit_and_date_tests {
         evaluate_line(s, None, today()).unwrap().display
     }
 
+    fn type_in(c: &mut Calculator, s: &str) {
+        for ch in s.chars() {
+            c.on_key(KeyPress::ch(ch));
+        }
+    }
+
     fn err(s: &str) -> String {
         evaluate_line(s, None, today()).unwrap_err()
     }
 
     #[test]
     fn the_line_from_the_bug_report_now_works() {
-        assert_eq!(ev("25 feet in furlongs"), "0.0378787879 furlongs");
+        assert_eq!(ev("25 feet in furlongs"), "0.0378787878788… furlongs");
     }
 
     #[test]
@@ -683,5 +845,137 @@ mod unit_and_date_tests {
         // the conversion path.
         let e = err("hello in there");
         assert!(e.contains("hello"), "got {e}");
+    }
+
+    // --- formatting and tab ------------------------------------------------
+
+    #[test]
+    fn a_tiny_number_is_not_reported_as_zero() {
+        // This was a real bug: rounding to ten *decimal places* meant
+        // anything under 5e-11 displayed as exactly `0`, which is a confident
+        // wrong answer rather than a rounding.
+        assert_eq!(format_number(1e-12), "1e-12");
+        assert_eq!(format_number(4e-11), "4e-11");
+        assert_ne!(format_number(1e-12), "0");
+    }
+
+    #[test]
+    fn no_digit_is_printed_that_the_f64_does_not_have() {
+        // Also a real bug: `123456789.123456789` used to display as
+        // `...791`, inventing a final digit past f64's precision.
+        // Written as f64 actually stores it -- `123456789.123456789` is not
+        // representable, which is the whole point of the test.
+        let s = format_shown(123456789.12345679);
+        // Twelve significant digits, and nine of them are in front of the
+        // point, so the display keeps three decimals and says there is more.
+        assert_eq!(s.display, "123456789.123…");
+        // The full form is what f64 actually holds -- note it ends 679, not
+        // the 791 the old decimal-places formatter invented.
+        assert_eq!(s.full, "123456789.12345679");
+        assert!(!s.full.contains("791"), "invented a digit: {}", s.full);
+    }
+
+    #[test]
+    fn an_exact_answer_gets_no_ellipsis() {
+        for v in [4.0, 515.66, -0.5, 0.25, 1000.0] {
+            let s = format_shown(v);
+            assert!(!s.display.contains(ELLIPSIS), "{v} showed {}", s.display);
+            assert_eq!(s.display, s.full, "{v}");
+        }
+    }
+
+    #[test]
+    fn floating_point_noise_does_not_earn_an_ellipsis() {
+        // `1 ft in in` lands on 12.000000000000002. Flagging that as "there
+        // is more to see" would be true and useless.
+        let s = format_shown(12.000000000000002);
+        assert!(!s.display.contains(ELLIPSIS), "showed {}", s.display);
+        assert_eq!(s.display, "12");
+    }
+
+    #[test]
+    fn a_genuinely_longer_answer_says_so() {
+        let s = format_shown(1.0 / 3.0);
+        assert!(s.display.ends_with(ELLIPSIS), "{}", s.display);
+        assert_eq!(s.display.trim_end_matches(ELLIPSIS), "0.333333333333");
+        assert_eq!(s.full, "0.3333333333333333");
+    }
+
+    #[test]
+    fn the_full_form_is_the_shortest_that_reads_back_the_same() {
+        // Not seventeen digits regardless: 515.66 must stay 515.66 rather
+        // than becoming 515.66000000000003.
+        for v in [515.66, 1.0 / 3.0, 2.0f64.sqrt() * 3.0, -0.1] {
+            let full = format_shown(v).full;
+            assert_eq!(full.parse::<f64>().unwrap(), v, "{full} does not read back as {v}");
+        }
+        assert_eq!(format_shown(515.66).full, "515.66");
+    }
+
+    #[test]
+    fn tab_pastes_the_whole_answer_at_the_cursor() {
+        let mut c = Calculator::new();
+        type_in(&mut c, "1/3");
+        c.on_key(KeyPress::plain(Key::Enter));
+        assert!(c.history.last().unwrap().result.ends_with(ELLIPSIS));
+        c.on_key(KeyPress::plain(Key::Tab));
+        assert_eq!(c.input, "0.3333333333333333", "every digit, no ellipsis");
+    }
+
+    #[test]
+    fn tab_keeps_the_unit_where_ans_would_lose_it() {
+        let mut c = Calculator::new();
+        type_in(&mut c, "25 ft in m");
+        c.on_key(KeyPress::plain(Key::Enter));
+        c.on_key(KeyPress::plain(Key::Tab));
+        assert!(c.input.ends_with(" m"), "the unit came too: {}", c.input);
+        assert_eq!(c.ans, Some(7.62), "where ans is a bare number");
+    }
+
+    #[test]
+    fn tab_can_reach_a_date_which_ans_cannot() {
+        // A date answer deliberately leaves `ans` alone, so `ans` cannot
+        // refer to it at all. Tab can, because it works in text.
+        let mut c = Calculator::new();
+        c.today = Some(crate::date::Date::new(2026, 8, 22));
+        type_in(&mut c, "today + 90 days");
+        c.on_key(KeyPress::plain(Key::Enter));
+        assert_eq!(c.ans, None, "unchanged by a date");
+        c.on_key(KeyPress::plain(Key::Tab));
+        assert!(c.input.starts_with("2026-11-20"), "{}", c.input);
+    }
+
+    #[test]
+    fn tab_appends_rather_than_replacing_what_is_typed() {
+        let mut c = Calculator::new();
+        type_in(&mut c, "2+2");
+        c.on_key(KeyPress::plain(Key::Enter));
+        type_in(&mut c, "10*");
+        c.on_key(KeyPress::plain(Key::Tab));
+        assert_eq!(c.input, "10*4");
+        c.on_key(KeyPress::plain(Key::Enter));
+        assert_eq!(c.ans, Some(40.0));
+    }
+
+    #[test]
+    fn tab_on_an_empty_history_does_nothing() {
+        let mut c = Calculator::new();
+        assert!(!c.on_key(KeyPress::plain(Key::Tab)), "unconsumed, so the tool sees it");
+        assert_eq!(c.input, "");
+    }
+
+    #[test]
+    fn what_tab_pastes_evaluates_to_what_was_shown() {
+        // The round trip that makes Tab trustworthy: paste it, evaluate it,
+        // get the same answer back.
+        for expr in ["1/3", "sqrt(2)*3", "437*1.18", "2^0.5"] {
+            let mut c = Calculator::new();
+            type_in(&mut c, expr);
+            c.on_key(KeyPress::plain(Key::Enter));
+            let first = c.ans.unwrap();
+            c.on_key(KeyPress::plain(Key::Tab));
+            c.on_key(KeyPress::plain(Key::Enter));
+            assert_eq!(c.ans, Some(first), "{expr} did not survive a tab");
+        }
     }
 }

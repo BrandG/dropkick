@@ -2436,6 +2436,77 @@ builds is a configuration that does not work.** The `dbus` feature exists so the
 no-networking claim can be checked with the D-Bus code removed entirely, and it
 had quietly stopped being able to do that.
 
+## TAB IN THE CALCULATOR, AND TWO FORMATTER BUGS — 2026-08-25 (user)
+
+The user asked what the difference was between `ans` and pasting the previous
+result. Answering it properly meant reading the code, and the code had two
+bugs in it.
+
+### What the difference actually is
+
+Three things, not the one I had written in the roadmap:
+
+1. **Precision.** `ans` is an `f64`; the history holds a formatted string.
+2. **Units.** `25 ft in m` displays `7.62 m` and sets `ans` to a bare `7.62`.
+   The text carries the unit; the number cannot.
+3. **Dates.** A date answer deliberately leaves `ans` alone — there is no
+   sensible number for it — so **`ans` cannot reach a date result at all.**
+   Text can.
+
+So `ans` is a *reference*: late-bound and exact. Tab is *text*: early-bound,
+editable, and the only form that carries a unit or a date. Both earn their
+place, which is why Tab was worth building rather than being a shortcut for
+something that already existed.
+
+### The two bugs
+
+Probing `format_number` at the extremes, to answer "how much precision does
+the display lose":
+
+- **`1e-12` displayed as `0`.** Anything below 5e-11 did. That is not a
+  rounding, it is a confident wrong answer, and it lands exactly on the case
+  the user raised — small units, scientific work.
+- **`123456789.123456789` displayed as `123456789.123456791`.** The final `1`
+  is past f64's precision. The stored value ends `...679`. We were printing an
+  invented digit.
+
+One cause: **rounding by decimal places instead of significant digits.** Ten
+decimal places is far too few for a small number and more than an f64 has for
+a large one. Significant digits is the rule that fits the type — an f64 carries
+about 15 to 17 — so it fixes both ends at once.
+
+### The ellipsis, and why Tab pastes the full value
+
+The user's idea: mark a truncated result with `…` so nobody is misled about
+precision. Then the fork — does Tab paste what is shown, or everything?
+
+**Everything.** The ellipsis is what makes that unsurprising: it says "there is
+more here", and Tab is how you get it. That dissolves the tradeoff the user was
+circling between readability and precision — the display stays short for
+everyday use, and the full value is one key away. Results that are exact get no
+ellipsis at all, so `515.66` pastes as `515.66`.
+
+The user then spotted a second benefit I had missed: **it doubles as "show me
+the whole thing".** Tab puts the value in the input line, where you can read
+it. Expanding a truncated result needs no separate feature.
+
+### Two things that had to be got right
+
+**The full form is Rust's shortest round-trip, not seventeen digits.** My first
+attempt used seventeen and flagged `515.66` as truncated, because seventeen
+significant digits of it is `515.66000000000003`. Rust's own float `Display`
+gives the shortest string that reads back as the same f64, which is exactly the
+right definition of "the whole thing".
+
+**The ellipsis needs a noise floor.** `1 ft in in` computes to
+`12.000000000000002`, so a strict "did we lose anything" test puts `12…` on
+screen — technically true, practically useless. `NOISE` at 1e-14 separates real
+extra digits from binary artefacts. It is the one tuned constant here and it is
+commented as such.
+
+A test evaluates what Tab pastes and requires the same answer back, which is
+the property that makes the key trustworthy rather than merely convenient.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

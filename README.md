@@ -211,8 +211,8 @@ The Calculator does arithmetic, unit conversion and date maths on the same line.
 
 ```
 437*1.18              = 515.66
-sqrt(2)*3             = 4.2426406871
-25 feet in furlongs   = 0.0378787879 furlongs
+sqrt(2)*3             = 4.24264068712…
+25 feet in furlongs   = 0.0378787878788… furlongs
 98.6 F in C           = 37 C
 today + 90 days       = 2026-11-20 (Friday)
 2026-12-25 - today    = 125 days
@@ -220,7 +220,22 @@ today + 90 days       = 2026-11-20 (Friday)
 
 `in` and `to` both work. Length, mass, volume, time, data, angle and
 temperature are covered, and a conversion can take an expression: `(20+5) ft in
-m`. `ans` reuses the last numeric answer.
+m`.
+
+**`…` means there are more digits than fit**, and `Tab` is how you get them —
+it pastes the last answer into the input line, in full, where you can read it,
+edit it, or build the next expression around it. Results that are exact get no
+ellipsis, so `515.66` stays `515.66`.
+
+`Tab` and `ans` are not the same thing, and both earn their place:
+
+* **`ans` is a reference.** It re-reads the last numeric answer when the line
+  is evaluated, and it is always exact.
+* **`Tab` is text.** What you get is fixed the moment you press it and you can
+  edit it afterwards — and text is the only form that carries a **unit** or a
+  **date**. `ans` after `25 ft in m` is a bare `7.62`, and after
+  `today + 90 days` it is unchanged, because a date is not a number. `Tab`
+  reaches both.
 
 Two places where a plausible-looking answer would be wrong, so the ambiguous
 name refuses to be guessed at:

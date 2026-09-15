@@ -16,13 +16,13 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-09-15
 
-**All seven tools built.** 451 tests, clippy clean at zero warnings.
+**All seven tools built.** 463 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
 | `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators, paste, persisted |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
-| `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
+| `alt+e` | Calculator | built — evaluator, functions, `ans`, `tab`, unit conversion, date maths |
 | `alt+r` | Calendar | built — month grid, timed and all-day entries, repeats, alarms |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
 | `alt+y` | Generate | built — passwords, UUIDs, and sha-256/sha-1/md5 of the clipboard |
@@ -145,6 +145,20 @@ beside the target and renames it over. The temp must be in the same directory
 (rename is only atomic within a filesystem) and is created `0600` from the
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
+
+**The Calculator formats by significant digits, not decimal places.** It used
+to round to ten decimal places, which was wrong at both ends: `1e-12` displayed
+as **`0`** — a confident wrong answer, not a rounding — and
+`123456789.123456789` displayed as `...791`, a final digit past what an f64
+holds. Significant digits is the rule that fits the type. Twelve are shown; the
+full form is Rust's own shortest round-trip (`{}`), *not* seventeen digits,
+because seventeen turns `515.66` into `515.66000000000003`.
+
+**The ellipsis has a noise floor, and it is load-bearing.** `1 ft in in`
+computes to `12.000000000000002`, so a strict "is anything lost" test would put
+`12…` on screen — true, and useless. `NOISE` (1e-14) is what separates real
+extra digits from binary floating-point artefacts. Lower it and the panel fills
+up with ellipses nobody can act on.
 
 **Calendar alarms are the only thing Dropkick does while idle.** Everything
 else sleeps on the event loop; the Timer's tick exists only while a timer
@@ -284,11 +298,6 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
 
 ## What is next, and what each needs
 
-- **Tab fills the last result in the Calculator** (user, 2026-08-25) — pressing
-  Tab inserts the previous line's *value* at the cursor. Distinct from `ans`,
-  which is a symbol that re-evaluates: Tab would paste `515.66` as literal
-  text you can then edit, where `ans` stays a reference. Both are wanted; they
-  are not the same thing. Tab is unbound in the Calculator today.
 - **Clickable notifications, and encrypted pinned clipboard entries** — both
   were blocked on D-Bus signal support, which the eyedropper has now added.
   `Bus::pick_color` is the worked example: install the match rule *before* the

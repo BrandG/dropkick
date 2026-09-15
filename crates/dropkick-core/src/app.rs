@@ -169,7 +169,9 @@ impl App {
             };
         }
         match self.active {
-            ToolId::Calculator => "2+2   25 ft in m   today + 90 days   ans reuses last   esc x",
+            ToolId::Calculator => {
+                "2+2   25 ft in m   today + 90 days   ans reuses last   tab pastes it   esc x"
+            }
             ToolId::Scratchpad => match self.scratchpad.mode {
                 crate::scratchpad::Mode::Insert => "INSERT   ctrl-v pastes   esc or ctrl-c leaves",
                 crate::scratchpad::Mode::Visual => "VISUAL   d cut   y copy   hjkl gg G extend   esc back",

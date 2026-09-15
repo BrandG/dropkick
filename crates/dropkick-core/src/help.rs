@@ -90,6 +90,8 @@ const SCRATCHPAD: &[Row] = &[
 const CALCULATOR: &[Row] = &[
     row("enter", "work it out", &[]),
     row("ans", "reuse the last answer", &[]),
+    row("tab", "paste it here, in full", &[]),
+    row("…", "more digits than fit", &[]),
     row("2 + 2 * 3", "the ordinary kind", &[]),
     row("25 ft in m", "convert units", &[]),
     row("today + 90 days", "date maths", &[]),

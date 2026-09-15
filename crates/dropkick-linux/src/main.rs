@@ -1571,6 +1571,21 @@ everywhere.";
             }),
         ),
         (
+            "calculator-tab",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('e'), 0);
+                app.calculator.today = Some(dropkick_core::date::Date::new(2026, 8, 22));
+                for line in ["437*1.18", "1/3", "sqrt(2)*3", "25 feet in furlongs"] {
+                    for c in line.chars() {
+                        app.on_key(KeyPress::ch(c), 0);
+                    }
+                    app.on_key(KeyPress::plain(DkKey::Enter), 0);
+                }
+                // Tab expands the last one into the input line.
+                app.on_key(KeyPress::plain(DkKey::Tab), 0);
+            }),
+        ),
+        (
             "calendar-repeat",
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('r'), 0);
