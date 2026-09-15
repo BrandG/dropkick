@@ -605,6 +605,18 @@ fn draw_clipboard(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: 
 }
 
 #[allow(clippy::too_many_arguments)]
+/// `31` -> `31st`. Only ever called with a day of the month.
+fn ordinal(day: u32) -> String {
+    let suffix = match (day % 10, day % 100) {
+        (_, 11..=13) => "th",
+        (1, _) => "st",
+        (2, _) => "nd",
+        (3, _) => "rd",
+        _ => "th",
+    };
+    format!("{day}{suffix}")
+}
+
 /// The "what was hashed" line: how much text, and the start of it.
 ///
 /// Both halves earn their place. The **count** is what catches a trailing
@@ -826,7 +838,7 @@ fn calculator_lines(bottom: f32, lh: f32, has_error: bool) -> (f32, Option<f32>)
 }
 
 fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i32, _bottom: i32) {
-    use dropkick_core::calendar::Mode;
+    use dropkick_core::calendar::{Mode, Repeat};
     use dropkick_core::date::{format_time, Date, MONTH_NAMES, WEEKDAY_NAMES};
 
     let c = &app.calendar;
@@ -922,8 +934,29 @@ fn draw_calendar(app: &App, text: &mut TextRenderer, canvas: &mut Canvas, top: i
         // All-day entries line up under the times rather than jutting left.
         let when = e.time.map_or_else(|| "  -  ".to_string(), format_time);
         text.draw(canvas, list_x, ly, &when, if e.time.is_some() { accent(app.active) } else { FAINT });
-        text.draw(canvas, list_x + adv * 6.5, ly, &e.text, FG);
+        let pen = text.draw(canvas, list_x + adv * 6.5, ly, &e.text, FG);
+        // How often it comes back, after the text and dimmer than it. An
+        // entry that happens once says nothing at all rather than "never".
+        if !e.repeat.label().is_empty() {
+            text.draw(canvas, pen + adv * 1.5, ly, e.repeat.label(), DIM);
+        }
         ly += lh * 1.2;
+    }
+
+    // The rule the user has to know before trusting a monthly entry, said
+    // where they are choosing it rather than buried in the help page.
+    if c.mode == Mode::List {
+        if let Some(e) = entries.get(c.selected) {
+            if e.repeat == Repeat::Monthly && e.date.day > 28 {
+                let note = format!(
+                    "the {} is skipped in months without one",
+                    ordinal(e.date.day)
+                );
+                ly += lh * 0.3;
+                text.draw(canvas, list_x, ly, &note, FAINT);
+                ly += lh * 1.1;
+            }
+        }
     }
 
     // Whatever is being typed, and the prompt for it.
@@ -1224,6 +1257,18 @@ mod tests {
     /// The line that makes a digest verifiable. A trailing newline changes a
     /// hash completely and is invisible in a preview, so the count is not
     /// decoration.
+    #[test]
+    fn ordinals_read_correctly_including_the_teens() {
+        for (n, want) in [
+            (1u32, "1st"), (2, "2nd"), (3, "3rd"), (4, "4th"),
+            (11, "11th"), (12, "12th"), (13, "13th"),
+            (21, "21st"), (22, "22nd"), (23, "23rd"), (29, "29th"),
+            (30, "30th"), (31, "31st"),
+        ] {
+            assert_eq!(ordinal(n), want);
+        }
+    }
+
     #[test]
     fn the_hashed_from_line_shows_the_length_and_the_start() {
         assert_eq!(hashed_from("abc"), "3 characters of \"abc\"");

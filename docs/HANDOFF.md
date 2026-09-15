@@ -16,14 +16,14 @@ future target; `dropkick-core` is kept free of anything OS-specific for it.
 
 ## State as of 2026-09-15
 
-**All seven tools built.** 433 tests, clippy clean at zero warnings.
+**All seven tools built.** 451 tests, clippy clean at zero warnings.
 
 | key | tool | state |
 |---|---|---|
 | `alt+q` | Scratchpad | built — vi-ish modes, word wrap, burst undo, `v`/`V` selection, `d`/`y` operators, paste, persisted |
 | `alt+w` | Clipboard | built — background capture, search, pinning, masked resume |
 | `alt+e` | Calculator | built — evaluator, functions, `ans`, unit conversion, date maths |
-| `alt+r` | Calendar | built — month grid, timed and all-day entries, saved to disk |
+| `alt+r` | Calendar | built — month grid, timed and all-day entries, repeats, alarms |
 | `alt+t` | Timer | built — countdown + stopwatch, notification on expiry |
 | `alt+y` | Generate | built — passwords, UUIDs, and sha-256/sha-1/md5 of the clipboard |
 | `alt+u` | Color | built — hex/rgb/hsl/names; eyedropper written but **switched off**, COSMIC refuses it |
@@ -146,6 +146,39 @@ beside the target and renames it over. The temp must be in the same directory
 start, not tightened afterwards. Saves happen on a ~2s debounce, on hide, and
 on quit.
 
+**Calendar alarms are the only thing Dropkick does while idle.** Everything
+else sleeps on the event loop; the Timer's tick exists only while a timer
+runs. `start_alarm_poll` is armed once at startup and never dropped, at
+`ALARM_POLL_SECS` (30s, and it must divide a minute or an entry's minute could
+be stepped over). That is a change in what kind of program this is — do not
+add a second always-on poll without the same deliberation.
+
+**Alarms poll the wall clock; they never schedule.** `tz::now_local()`, never
+`now_ms` — `now_ms` is milliseconds since the daemon started and an alarm keyed
+off it drifts by however long Dropkick has been up. Polling is also what makes
+suspend, a manually changed clock and DST all work with no code: nothing is
+scheduled in advance, so a machine that wakes at 10:00 simply sees 10:00.
+
+**Alarms only fire for times that pass while the daemon is running.**
+`started_local` is the floor. This is why nothing has to be persisted to stop a
+restart re-announcing the whole day, and why the `fired` set can be in memory.
+The honest cost is that a one-off missed while Dropkick was off is gone;
+recurring entries absorb it, since tomorrow's still arrives. Said plainly in
+the README rather than hidden.
+
+**A recurrence marker rides in the *time* field** (`09:00/weekly`), not beside
+the text. Put it before the text and an entry called "daily standup" parses as
+a daily recurrence of "standup" — the same collision class as a key that is
+both a unit and a command. The time field is already strictly parsed, so
+nothing free-form can wander into it, and old files without a marker read
+unchanged.
+
+**Monthly recurrence needs no exceptions table.** `occurs_on` matches the day
+number, and there is no 31st of February for it to match — so those months are
+skipped, the 29th and 30th skip February except in leap years, and 29 February
+returns every four. One rule. The panel says so under a monthly entry dated
+after the 28th.
+
 **`hash.rs` is hand-rolled, and that is only safe because of the vectors.**
 Three algorithms, no dependencies, ~250 lines. Every one has published test
 vectors and they are all in the tests, plus a million-byte message (which is
@@ -251,10 +284,11 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
 
 ## What is next, and what each needs
 
-- **Repeating calendar entries, and alarms for them** — deliberately left out.
-  An entry with a time is inert; nothing notifies. The Timer already knows how
-  to raise a notification, so wiring one to a calendar entry is small; recurrence
-  is not, and should not be started casually.
+- **Tab fills the last result in the Calculator** (user, 2026-08-25) — pressing
+  Tab inserts the previous line's *value* at the cursor. Distinct from `ans`,
+  which is a symbol that re-evaluates: Tab would paste `515.66` as literal
+  text you can then edit, where `ans` stays a reference. Both are wanted; they
+  are not the same thing. Tab is unbound in the Calculator today.
 - **Clickable notifications, and encrypted pinned clipboard entries** — both
   were blocked on D-Bus signal support, which the eyedropper has now added.
   `Bus::pick_color` is the worked example: install the match rule *before* the

@@ -17,6 +17,19 @@ pub struct Config {
     pub timer_notify: bool,
     /// Ask the notification server to play the alarm sound.
     pub timer_sound: bool,
+    /// Notify when a calendar entry's time arrives.
+    ///
+    /// Alarms only fire for times that pass while Dropkick is running: start
+    /// it at 14:00 and this morning's 09:00 entry stays silent. That is what
+    /// keeps a restart from re-announcing the whole day, and it is why
+    /// recurring entries are the ones this suits — miss Monday's and
+    /// Tuesday's still arrives.
+    pub calendar_notify: bool,
+    /// Ask for a sound with a calendar notification.
+    pub calendar_sound: bool,
+    /// Bring the panel up when a calendar entry comes due. Off, for the same
+    /// reasons as `timer.show_panel`.
+    pub calendar_show_panel: bool,
     /// Bring the panel up when a countdown finishes.
     ///
     /// Off by default, and worth knowing why before turning it on: an overlay
@@ -66,6 +79,9 @@ impl Default for Config {
         Config {
             timer_notify: true,
             timer_sound: true,
+            calendar_notify: true,
+            calendar_sound: true,
+            calendar_show_panel: false,
             timer_show_panel: false,
             generate_length: 20,
             generate_lower: true,
@@ -160,6 +176,9 @@ impl Config {
             match key {
                 "timer.notify" => config.timer_notify = on,
                 "timer.sound" => config.timer_sound = on,
+                "calendar.notify" => config.calendar_notify = on,
+                "calendar.sound" => config.calendar_sound = on,
+                "calendar.show_panel" => config.calendar_show_panel = on,
                 "timer.show_panel" => config.timer_show_panel = on,
                 "generate.length" => match value.parse::<usize>() {
                     Ok(n) => config.generate_length = n,
@@ -254,6 +273,15 @@ timer.sound = true
 # and the notification above already waits for you. Turn it on if you want
 # an alarm that is unmissable rather than merely patient.
 timer.show_panel = false
+
+# Notify when a calendar entry comes due, and whether to play a sound with
+# it. Alarms only fire for times that pass while Dropkick is running: start
+# it at 14:00 and this morning's 09:00 entry stays silent, rather than
+# arriving five hours late. Recurring entries suit this best -- miss Monday's
+# because the machine was off and Tuesday's still arrives.
+calendar.notify = true
+calendar.sound = true
+calendar.show_panel = false
 
 # Default password length in Generate, and which character types it draws
 # from. Nothing generated is ever stored or copied into clipboard history.

@@ -81,6 +81,14 @@ const VISIBLE_MS: u64 = 90;
 /// Gap between bench cycles, so the compositor is not measured mid-animation.
 const GAP_MS: u64 = 150;
 
+/// How often to look for a calendar entry whose time has come.
+///
+/// Thirty seconds, so an alarm is at most that late -- imperceptible for a
+/// reminder, and cheap enough that an idle daemon is still effectively
+/// asleep. It must divide a minute evenly, or an entry's minute could be
+/// stepped straight over.
+const ALARM_POLL_SECS: u64 = 30;
+
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Phase {
@@ -149,6 +157,26 @@ struct Dropkick {
     big: TextRenderer,
     /// Live while the timer runs, dropped when it stops.
     tick_token: Option<RegistrationToken>,
+    /// Alarm poll. Unlike `tick_token` this is armed at startup and never
+    /// dropped — see [`ALARM_POLL_SECS`].
+    alarm_token: Option<RegistrationToken>,
+    /// The local date and minute the daemon started.
+    ///
+    /// **Alarms only fire for times that pass while Dropkick is running.**
+    /// Start it at 14:00 and this morning's 09:00 entry stays silent, rather
+    /// than the panel arriving five hours late with a reminder you can no
+    /// longer act on. It also means nothing has to be persisted to stop a
+    /// restart re-firing the whole day.
+    ///
+    /// Recurring entries survive this well: miss Monday's because the machine
+    /// was off and Tuesday's still arrives. A one-off missed this way is gone,
+    /// which is the honest cost and is written down in the README.
+    started_local: (dropkick_core::date::Date, u32),
+    /// Occurrences already announced, as (day number, minute, text).
+    ///
+    /// Keyed by occurrence rather than by entry, because one hourly entry has
+    /// twenty-four of them a day. Pruned when the date rolls over.
+    fired: std::collections::HashSet<(i64, u32, String)>,
     /// The pending debounced calendar write, if one is armed.
     calendar_token: Option<RegistrationToken>,
     /// The pending debounced scratchpad write.
@@ -771,6 +799,79 @@ impl Dropkick {
         self.app.notice = Some(opacity_notice(next));
     }
 
+    /// Start the alarm poll, once, for the life of the daemon.
+    ///
+    /// **This is the one thing Dropkick does while idle.** Everything else
+    /// here sleeps on the event loop until poked; the timer's tick exists
+    /// only while a timer runs. A calendar alarm has to notice a time
+    /// arriving with nobody watching, so something must wake up regularly and
+    /// look. At [`ALARM_POLL_SECS`] that is negligible, but it is a change in
+    /// what kind of program this is and should not be made casually.
+    ///
+    /// Polling rather than scheduling is deliberate — see [`tz::now_local`].
+    fn start_alarm_poll(&mut self) {
+        if self.alarm_token.is_some() {
+            return;
+        }
+        let handle = self.handle.clone();
+        self.alarm_token = handle
+            .insert_source(
+                Timer::from_duration(Duration::from_secs(ALARM_POLL_SECS)),
+                |_, _, state: &mut Dropkick| {
+                    state.check_alarms();
+                    TimeoutAction::ToDuration(Duration::from_secs(ALARM_POLL_SECS))
+                },
+            )
+            .ok();
+    }
+
+    /// Announce any calendar entry whose time has arrived.
+    fn check_alarms(&mut self) {
+        if !self.settings.config.calendar_notify {
+            return;
+        }
+        let (today, now_min) = tz::now_local();
+        let today_days = today.to_days();
+
+        // Yesterday's occurrences can never fire again, so the set does not
+        // need to remember them. One hourly entry is twenty-four a day.
+        self.fired.retain(|(day, _, _)| *day == today_days);
+
+        // Only occurrences at or after the moment the daemon started. On a
+        // later day every occurrence qualifies.
+        let floor = if today == self.started_local.0 { self.started_local.1 } else { 0 };
+
+        // What is due is decided in core, where it is tested. Cloned out
+        // before touching `fired`, since both borrow `self`.
+        let candidates: Vec<(u32, String)> = self
+            .app
+            .calendar
+            .due_at(today, now_min, floor)
+            .into_iter()
+            .map(|(m, t)| (m, t.to_string()))
+            .collect();
+
+        // All this layer owns: whether it has already been said out loud.
+        let mut due: Vec<(u32, String)> = Vec::new();
+        for (minute, text) in candidates {
+            if self.fired.insert((today_days, minute, text.clone())) {
+                due.push((minute, text));
+            }
+        }
+        if due.is_empty() {
+            return;
+        }
+        for (minute, text) in &due {
+            self.notify_calendar_entry(*minute, text);
+        }
+        // Same reasoning as the timer: a notification in the corner is
+        // glanceable by design and therefore missable. Showing the panel is
+        // the one alert that does not depend on looking at the right corner.
+        if self.settings.config.calendar_show_panel && self.phase == Phase::Hidden {
+            self.show_for_alarm();
+        }
+    }
+
     /// Keep a tick source alive exactly while the timer is running.
     ///
     /// 100ms while the panel is up, so the readout moves; once a second while
@@ -860,6 +961,31 @@ impl Dropkick {
         // Built without the dbus feature: the timer still finishes, it just
         // cannot tell anyone who is not looking at the panel.
     }
+
+    #[cfg(feature = "dbus")]
+    fn notify_calendar_entry(&mut self, minute: u32, text: &str) {
+        let title = format!("Dropkick: {}", dropkick_core::date::format_time(minute));
+        match dropkick_linux::dbus::Bus::session().and_then(|mut bus| {
+            bus.notify(
+                &title,
+                text,
+                dropkick_linux::dbus::Alert::Alarm { sound: self.settings.config.calendar_sound },
+            )
+        }) {
+            Ok(id) => {
+                if std::env::var_os("DROPKICK_DEBUG").is_some() {
+                    // The time, not the text. Entry text is the user's, and
+                    // the debug log follows the same rule the clipboard
+                    // logging does: lengths and times, never content.
+                    eprintln!("  [calendar] {minute} due, notification {id} posted");
+                }
+            }
+            Err(e) => eprintln!("dropkickd: could not post notification: {e}"),
+        }
+    }
+
+    #[cfg(not(feature = "dbus"))]
+    fn notify_calendar_entry(&mut self, _minute: u32, _text: &str) {}
 
     fn dispatch_key(&mut self, qh: &QueueHandle<Self>, event: KeyEvent) {
         let Some(press) = translate(&event, self.mods) else { return };
@@ -1088,6 +1214,9 @@ fn main() {
         text,
         big,
         tick_token: None,
+        alarm_token: None,
+        started_local: tz::now_local(),
+        fired: std::collections::HashSet::new(),
         calendar_token: None,
         scratchpad_token: None,
         saved_scratchpad: String::new(),
@@ -1162,6 +1291,12 @@ fn main() {
             state.app.timer.is_running(),
             state.tick_token.is_some()
         );
+    }
+
+    // Not in bench mode: it measures summon latency, and a poll waking up
+    // mid-run is exactly the kind of thing that shows up in a percentile.
+    if !state.bench {
+        state.start_alarm_poll();
     }
 
     if state.bench {
@@ -1433,6 +1568,37 @@ everywhere.";
             Box::new(|app: &mut App| {
                 app.on_key(KeyPress::alt('q'), 0);
                 app.on_key(KeyPress::alt('/'), 0);
+            }),
+        ),
+        (
+            "calendar-repeat",
+            Box::new(|app: &mut App| {
+                app.on_key(KeyPress::alt('r'), 0);
+                let today = dropkick_core::date::Date::new(2026, 8, 21);
+                app.calendar.set_today(today);
+                app.calendar.focus = today;
+                app.calendar.add(today, Some(9 * 60), "standup");
+                app.calendar.add(dropkick_core::date::Date::new(2026, 8, 31), None, "rent");
+                app.calendar.add(today, Some(16 * 60 + 30), "call Dana");
+                // Into the day's list, then r twice to reach daily.
+                app.on_key(KeyPress::plain(DkKey::Tab), 0);
+                app.on_key(KeyPress::ch('r'), 0);
+                app.on_key(KeyPress::ch('r'), 0);
+            }),
+        ),
+        (
+            "calendar-monthly-note",
+            Box::new(|app: &mut App| {
+                // The 31st, monthly: the case that carries the skip note.
+                app.on_key(KeyPress::alt('r'), 0);
+                let day = dropkick_core::date::Date::new(2026, 8, 31);
+                app.calendar.set_today(day);
+                app.calendar.focus = day;
+                app.calendar.add(day, None, "rent");
+                app.on_key(KeyPress::plain(DkKey::Tab), 0);
+                for _ in 0..4 {
+                    app.on_key(KeyPress::ch('r'), 0);
+                }
             }),
         ),
         (

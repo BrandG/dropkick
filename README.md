@@ -149,6 +149,10 @@ timer.notify = true      # notify when a countdown finishes
 timer.sound = true       # ask the server to play a sound with it
 timer.show_panel = false # also bring the panel up (off: it covers the screen)
 
+calendar.notify = true      # notify when a calendar entry comes due
+calendar.sound = true       # play a sound with it
+calendar.show_panel = false # also bring the panel up
+
 panel.opacity = 100      # 100 is solid; lower to see through it
 
 generate.length = 20     # default password length
@@ -179,6 +183,29 @@ the day's list so `d` can delete one.
 **It will not guess at a time.** If you type something that could be either,
 like a bare `3`, it asks whether you meant 03:00 or 15:00 rather than picking
 one and being quietly wrong.
+
+In the day's list, `r` cycles how often an entry repeats: **none, hourly,
+daily, weekly, monthly**. Five choices, not a rule you write — there is no way
+to say "first Monday of the month", deliberately. Recurrence languages have no
+natural stopping point, and a fixed list cycled with one key cannot grow into
+one.
+
+Monthly means the same day number, and **the date has to exist**: a monthly
+entry on the 31st happens in the seven months that have one and skips the
+rest. The 29th and 30th skip February except in leap years. February 29th
+comes back every four. The panel says so under the entry when it applies.
+
+Entries with a time **alarm** when they come due — a notification, and
+optionally the panel itself (`calendar.show_panel`). All-day entries never
+alarm; they say "today is X", not "at X, do Y".
+
+**Alarms only fire for times that pass while Dropkick is running.** Start it at
+14:00 and this morning's 09:00 entry stays quiet, rather than arriving five
+hours late with something you can no longer act on. It is also why a restart
+never re-announces the whole day. The cost is real and worth knowing: a one-off
+you missed because the machine was off is missed for good. Recurring entries
+absorb this — miss Monday's and Tuesday's still arrives — which is the case
+they suit best.
 
 The Calculator does arithmetic, unit conversion and date maths on the same line.
 

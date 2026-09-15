@@ -2321,6 +2321,85 @@ another route.
   on `Kind::Password`, so they stay out of the way. There is a test holding
   that, since `h` sits next to them in the same match.
 
+## CALENDAR ALARMS AND RECURRENCE — 2026-08-25 (user)
+
+Both, after an argument I partly lost.
+
+### What I got wrong
+
+I argued recurrence raised the reliability bar and should be skipped: alarms
+fire only while the daemon runs, and "every weekday at 09:00" that silently
+misses the days you rebooted is worse than no feature.
+
+**That is backwards.** A recurring alarm *degrades gracefully* — miss Monday's
+and Tuesday's still arrives. A one-off missed the same way is gone silently and
+for good. Under the only-while-running rule, recurrence is the **safer** of the
+two, not the riskier. The user pushing back is what made me look again.
+
+### A closed set, not a grammar
+
+The user's design, and it solves the thing I was actually worried about
+structurally rather than by discipline: five choices cycled with one key —
+none, hourly, daily, weekly, monthly. There is no syntax, so there is nothing
+to extend. `RRULE` cannot grow out of this the way it grows out of "just daily
+and weekly to start".
+
+February was their call too: **skip it and say so.** Clamping the 31st to the
+28th silently turns the entry into a different one; rolling to 3 March is
+nonsense. And the rule needs no exceptions table — `occurs_on` matches the day
+number, and there is no 31st of February to match. The 29th and 30th skip
+February except in leap years; 29 February returns every four. One rule, and
+the panel states it under a monthly entry dated after the 28th, where the
+choice is being made rather than in the help page.
+
+### Set afterwards, not while adding
+
+Offered as a fork; the user took `r` on an existing entry over a third step in
+the add flow. Better on two counts: adding stays exactly as fast for the
+overwhelming majority of entries, which happen once, and an entry can change
+its mind without being deleted and retyped.
+
+### The marker rides in the time field
+
+`09:00/weekly`, not a word before the text. Putting it beside the text makes
+an entry called "daily standup" parse as a daily recurrence of "standup" —
+the same collision class as `s` meaning both "stopwatch" and "seconds" in the
+Timer. The time field is already strictly parsed. Old files read unchanged, and
+an unknown marker joins the unparsed lines rather than being dropped.
+
+### Alarms: polling, and only while running
+
+Two decisions carry this.
+
+**Poll the wall clock, never schedule.** `tz::now_local()`, never `now_ms` —
+`now_ms` is milliseconds since the daemon started and would drift by however
+long Dropkick has been up. Polling also means suspend, a changed clock and the
+DST switch all work with no code written for them: nothing is scheduled in
+advance, so a machine that wakes at 10:00 simply sees 10:00, and "daily at
+09:00" stays 09:00 across the spring change.
+
+**Only fire for times that pass while the daemon runs.** `started_local` is the
+floor. This is what makes the fired-set an in-memory `HashSet` rather than a
+file-format change: a restart cannot re-announce the day because it will not
+look before its own start. Keyed by occurrence rather than by entry, since one
+hourly entry has twenty-four a day, and pruned when the date rolls over.
+
+This is **the only thing Dropkick does while idle.** Everything else sleeps on
+the event loop; the Timer's tick exists only while a timer runs. Thirty seconds
+is negligible, but it changes what kind of program this is and is written into
+the handoff as such.
+
+`due_at` lives in core, where it can be tested, and returns *what* is due
+rather than doing anything about it. The platform keeps only the "has this
+already been said out loud" bookkeeping. Same split as everywhere else.
+
+### Caught by existing tests
+
+The help-column collision test rejected the first draft of the Calendar rows:
+`r  in that list` widened the keys column enough to push every description into
+the second column. Shortened to `r`. That test has now earned itself three
+times.
+
 ## --no-default-features DID NOT BUILD — 2026-09-15 (user)
 
 `cargo build --no-default-features` had been failing for some time, and nothing
@@ -2344,7 +2423,7 @@ the reply channel has no part to play in that build at all.
 **Nothing changed in the default build**, which is the point: this was a
 build-graph bug, not a behaviour one, and the eyedropper stays off behind
 `ColorTool::new` either way. Verified both ways round — both builds, both
-`--all-targets`, clippy clean under each feature set, and 433 tests.
+`--all-targets`, clippy clean under each feature set, and 451 tests.
 
 The real lesson is the one about `deny.toml`, again: **a configuration nobody
 builds is a configuration that does not work.** The `dbus` feature exists so the
