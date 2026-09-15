@@ -201,7 +201,9 @@ impl App {
                 crate::calendar::Mode::Text => "type what it is   enter for the time   esc cancels",
                 crate::calendar::Mode::Time => "15:00 or 3pm, blank for all day   enter   esc back",
                 crate::calendar::Mode::Disambiguate(_) => "a morning   p afternoon   esc back",
-                crate::calendar::Mode::List => "jk pick   d delete   esc back to the month",
+                crate::calendar::Mode::List => {
+                    "jk pick   r repeat   d delete   esc back to the month"
+                }
                 crate::calendar::Mode::Grid => {
                     "hjkl move  [ ] month  t today  a add  tab entries  esc x"
                 }

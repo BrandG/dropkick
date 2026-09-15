@@ -139,6 +139,27 @@ pub fn today_local() -> (Date, bool) {
     (Date::from_days(local.div_euclid(86_400)), offset.is_some())
 }
 
+/// The local date and minutes past midnight, right now.
+///
+/// **This, and never `now_ms`.** `now_ms` is milliseconds since the daemon
+/// started; an alarm keyed off it would drift by however long Dropkick has
+/// been up. Calendar entries are wall-clock facts and have to be compared
+/// against a wall clock.
+///
+/// Reading it fresh every time is also what makes alarms survive a suspend:
+/// nothing is scheduled in advance, so closing the lid at 08:00 and opening
+/// it at 10:00 simply means the next poll sees 10:00. The same property
+/// handles a manually changed clock and the DST switch — "daily at 09:00"
+/// stays 09:00 local across the spring change without any code for it.
+pub fn now_local() -> (Date, u32) {
+    let now = now_unix();
+    let offset = std::fs::read(PATH).ok().and_then(|b| offset_at(&b, now));
+    let local = now + offset.unwrap_or(0) as i64;
+    let date = Date::from_days(local.div_euclid(86_400));
+    let minutes = (local.rem_euclid(86_400) / 60) as u32;
+    (date, minutes)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

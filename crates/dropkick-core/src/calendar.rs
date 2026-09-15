@@ -32,6 +32,71 @@ pub struct Entry {
     /// Minutes since midnight, or `None` for an all-day entry.
     pub time: Option<u32>,
     pub text: String,
+    /// How often it comes back. [`Repeat::None`] for nearly everything.
+    pub repeat: Repeat,
+}
+
+/// How an entry recurs.
+///
+/// **A closed set of five, chosen deliberately over a grammar.** A recurrence
+/// *language* — RFC 5545's `RRULE`, or anything that can say "first Monday" —
+/// has no natural stopping point: `BYSETPOS`, `COUNT` against `UNTIL`,
+/// exception dates, and the edge cases nobody thinks of until they arrive.
+/// Cycling a fixed list with one key cannot grow into that, because there is
+/// no syntax to extend.
+///
+/// If this ever needs "first Monday of the month", that is a different
+/// feature and a different design. It is not an extension of this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Repeat {
+    #[default]
+    None,
+    Hourly,
+    Daily,
+    Weekly,
+    Monthly,
+}
+
+impl Repeat {
+    /// The order `r` walks, ending back at `None` so the key can undo itself.
+    pub fn next(self) -> Repeat {
+        match self {
+            Repeat::None => Repeat::Hourly,
+            Repeat::Hourly => Repeat::Daily,
+            Repeat::Daily => Repeat::Weekly,
+            Repeat::Weekly => Repeat::Monthly,
+            Repeat::Monthly => Repeat::None,
+        }
+    }
+
+    /// What the panel shows beside an entry. Empty for `None`, so an entry
+    /// that does not repeat says nothing rather than saying "never".
+    pub fn label(self) -> &'static str {
+        match self {
+            Repeat::None => "",
+            Repeat::Hourly => "hourly",
+            Repeat::Daily => "daily",
+            Repeat::Weekly => "weekly",
+            Repeat::Monthly => "monthly",
+        }
+    }
+
+    fn token(self) -> Option<&'static str> {
+        match self {
+            Repeat::None => None,
+            other => Some(other.label()),
+        }
+    }
+
+    fn from_token(s: &str) -> Option<Repeat> {
+        match s {
+            "hourly" => Some(Repeat::Hourly),
+            "daily" => Some(Repeat::Daily),
+            "weekly" => Some(Repeat::Weekly),
+            "monthly" => Some(Repeat::Monthly),
+            _ => None,
+        }
+    }
 }
 
 impl Entry {
@@ -42,8 +107,62 @@ impl Entry {
     }
 
     pub fn to_line(&self) -> String {
-        let t = self.time.map_or(ALL_DAY.to_string(), format_time);
+        let mut t = self.time.map_or(ALL_DAY.to_string(), format_time);
+        // The recurrence rides in the *time* field, not beside the text.
+        //
+        // Putting it before the text would make an entry called "daily
+        // standup" parse as a daily recurrence of "standup" -- the same class
+        // of collision as a key that is both a unit and a command. The time
+        // field is already strictly parsed, so nothing free-form can wander
+        // into it. Old files have no suffix and read exactly as before.
+        if let Some(token) = self.repeat.token() {
+            t.push('/');
+            t.push_str(token);
+        }
         format!("{} {} {}", self.date.to_iso(), t, self.text)
+    }
+
+    /// Whether this entry lands on `date` — the one place recurrence is
+    /// decided, so the month dots, the day list and the alarms cannot
+    /// disagree about it.
+    pub fn occurs_on(&self, date: Date) -> bool {
+        if date == self.date {
+            return true;
+        }
+        if date < self.date {
+            return false;
+        }
+        match self.repeat {
+            Repeat::None => false,
+            Repeat::Hourly | Repeat::Daily => true,
+            Repeat::Weekly => date.weekday() == self.date.weekday(),
+            // **The skip rule, and it needs no special case.** A monthly entry
+            // lands on the same day number, and there is no 31st of February
+            // for it to land on, so those months are simply missed. The 29th
+            // and 30th skip February except in leap years; the 29th of
+            // February comes back every four. One rule, no exceptions table.
+            Repeat::Monthly => date.day == self.date.day,
+        }
+    }
+
+    /// Every minute-past-midnight this entry alarms at on `date`.
+    ///
+    /// All-day entries never alarm: they say "today is X", not "at X, do Y".
+    pub fn alarm_times_on(&self, date: Date) -> Vec<u32> {
+        let Some(t) = self.time else { return Vec::new() };
+        if !self.occurs_on(date) {
+            return Vec::new();
+        }
+        match self.repeat {
+            // Hourly keeps the minute past the hour and starts from the
+            // entry's own time on its first day, every hour after that.
+            Repeat::Hourly => {
+                let minute = t % 60;
+                let first = if date == self.date { t / 60 } else { 0 };
+                (first..24).map(|h| h * 60 + minute).collect()
+            }
+            _ => vec![t],
+        }
     }
 }
 
@@ -123,16 +242,40 @@ impl Calendar {
         }
     }
 
+    /// Every occurrence on `date` whose time has arrived by `now_min`, no
+    /// earlier than `floor`.
+    ///
+    /// `floor` is how "only while running" is expressed: the platform passes
+    /// the minute the daemon started, so this morning's 09:00 is not
+    /// announced by a daemon that started at 14:00. On any later day the
+    /// caller passes 0 and everything qualifies.
+    ///
+    /// Pure, and returns *what* is due rather than doing anything about it —
+    /// the caller owns the "has this one already been announced" bookkeeping,
+    /// and this owns the part worth testing.
+    pub fn due_at(&self, date: Date, now_min: u32, floor: u32) -> Vec<(u32, &str)> {
+        let mut out: Vec<(u32, &str)> = Vec::new();
+        for entry in &self.entries {
+            for minute in entry.alarm_times_on(date) {
+                if minute <= now_min && minute >= floor {
+                    out.push((minute, entry.text.as_str()));
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub fn entries(&self) -> &[Entry] {
         &self.entries
     }
 
     pub fn on(&self, date: Date) -> Vec<&Entry> {
-        self.entries.iter().filter(|e| e.date == date).collect()
+        self.entries.iter().filter(|e| e.occurs_on(date)).collect()
     }
 
     pub fn has_entries(&self, date: Date) -> bool {
-        self.entries.iter().any(|e| e.date == date)
+        self.entries.iter().any(|e| e.occurs_on(date))
     }
 
     fn sort(&mut self) {
@@ -144,7 +287,12 @@ impl Calendar {
         if text.is_empty() {
             return;
         }
-        self.entries.push(Entry { date, time, text: to_single_line(text) });
+        self.entries.push(Entry {
+            date,
+            time,
+            text: to_single_line(text),
+            repeat: Repeat::None,
+        });
         self.sort();
         self.dirty = true;
     }
@@ -398,6 +546,19 @@ impl Calendar {
                 self.selected = self.selected.saturating_sub(1);
                 true
             }
+            // Cycle how often it repeats. Set here rather than while adding,
+            // so the common case -- an entry that happens once -- costs
+            // nothing, and so an entry that already exists can change its
+            // mind without being deleted and retyped.
+            Key::Char('r') => {
+                if let Some(target) = self.on(self.focus).get(self.selected).map(|e| (*e).clone()) {
+                    if let Some(pos) = self.entries.iter().position(|e| *e == target) {
+                        self.entries[pos].repeat = self.entries[pos].repeat.next();
+                        self.dirty = true;
+                    }
+                }
+                true
+            }
             Key::Char('d') | Key::Delete => {
                 // Find the entry by identity within the day, then remove it
                 // from the flat list -- indices into a filtered view cannot be
@@ -436,6 +597,10 @@ fn parse_line(line: &str) -> Option<Entry> {
     if text.is_empty() {
         return None;
     }
+    let (time_field, repeat) = match time_field.split_once('/') {
+        Some((t, token)) => (t, Repeat::from_token(token)?),
+        None => (time_field, Repeat::None),
+    };
     let time = if time_field == ALL_DAY {
         None
     } else {
@@ -444,7 +609,7 @@ fn parse_line(line: &str) -> Option<Entry> {
             _ => return None,
         }
     };
-    Some(Entry { date, time, text: text.to_string() })
+    Some(Entry { date, time, text: text.to_string(), repeat })
 }
 
 #[cfg(test)]
@@ -733,5 +898,194 @@ mod tests {
         assert_eq!(c.mode, Mode::Grid);
         assert!(c.draft_text.is_empty());
         assert!(c.on(c.focus).is_empty());
+    }
+
+    fn repeating(date: Date, time: Option<u32>, repeat: Repeat) -> Entry {
+        Entry { date, time, text: "thing".to_string(), repeat }
+    }
+
+    #[test]
+    fn a_one_off_happens_once() {
+        let e = repeating(Date::new(2026, 8, 21), Some(540), Repeat::None);
+        assert!(e.occurs_on(Date::new(2026, 8, 21)));
+        assert!(!e.occurs_on(Date::new(2026, 8, 22)));
+        assert!(!e.occurs_on(Date::new(2026, 8, 20)));
+    }
+
+    #[test]
+    fn nothing_recurs_backwards() {
+        // A daily entry made today is not a claim about last week.
+        let e = repeating(Date::new(2026, 8, 21), Some(540), Repeat::Daily);
+        assert!(!e.occurs_on(Date::new(2026, 8, 20)));
+        assert!(e.occurs_on(Date::new(2026, 8, 21)));
+        assert!(e.occurs_on(Date::new(2027, 1, 1)));
+    }
+
+    #[test]
+    fn weekly_keeps_the_weekday() {
+        // 2026-08-21 is a Friday.
+        let e = repeating(Date::new(2026, 8, 21), Some(540), Repeat::Weekly);
+        assert!(e.occurs_on(Date::new(2026, 8, 28)), "the next Friday");
+        assert!(!e.occurs_on(Date::new(2026, 8, 27)), "but not the Thursday");
+        assert!(e.occurs_on(Date::new(2026, 9, 4)));
+    }
+
+    /// The rule the user asked to be told about: the date has to exist.
+    #[test]
+    fn monthly_on_the_31st_skips_months_that_have_no_31st() {
+        let e = repeating(Date::new(2026, 1, 31), None, Repeat::Monthly);
+        assert!(e.occurs_on(Date::new(2026, 3, 31)), "March has one");
+        assert!(e.occurs_on(Date::new(2026, 5, 31)));
+        // February, April, June, September and November do not.
+        for (m, last) in [(2u32, 28u32), (4, 30), (6, 30), (9, 30), (11, 30)] {
+            for day in 1..=last {
+                assert!(
+                    !e.occurs_on(Date::new(2026, m, day)),
+                    "month {m} should be skipped entirely, but day {day} matched"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn monthly_on_the_29th_skips_february_except_in_a_leap_year() {
+        let e = repeating(Date::new(2026, 1, 29), None, Repeat::Monthly);
+        assert!(!e.occurs_on(Date::new(2027, 2, 28)), "2027 is not a leap year");
+        assert!(e.occurs_on(Date::new(2028, 2, 29)), "2028 is");
+    }
+
+    #[test]
+    fn the_29th_of_february_comes_back_every_four_years() {
+        let e = repeating(Date::new(2028, 2, 29), None, Repeat::Monthly);
+        assert!(e.occurs_on(Date::new(2032, 2, 29)));
+        assert!(e.occurs_on(Date::new(2028, 3, 29)), "and every other 29th");
+    }
+
+    #[test]
+    fn an_all_day_entry_never_alarms_however_it_repeats() {
+        // "today is X", not "at X, do Y".
+        let e = repeating(Date::new(2026, 8, 21), None, Repeat::Daily);
+        assert!(e.alarm_times_on(Date::new(2026, 8, 22)).is_empty());
+    }
+
+    #[test]
+    fn hourly_starts_at_its_own_time_then_runs_the_clock() {
+        // 14:23 on the first day, then every hour at 23 past.
+        let e = repeating(Date::new(2026, 8, 21), Some(14 * 60 + 23), Repeat::Hourly);
+        let first = e.alarm_times_on(Date::new(2026, 8, 21));
+        assert_eq!(first.first(), Some(&(14 * 60 + 23)), "not before it was made");
+        assert_eq!(first.last(), Some(&(23 * 60 + 23)));
+        assert_eq!(first.len(), 10);
+
+        let later = e.alarm_times_on(Date::new(2026, 8, 22));
+        assert_eq!(later.len(), 24, "a full day after that");
+        assert_eq!(later.first(), Some(&23));
+    }
+
+    #[test]
+    fn due_at_reports_times_that_have_arrived_and_not_ones_still_coming() {
+        let mut c = cal();
+        c.entries.push(repeating(Date::new(2026, 8, 21), Some(540), Repeat::None));
+        let day = Date::new(2026, 8, 21);
+        assert!(c.due_at(day, 539, 0).is_empty(), "09:00 has not arrived at 08:59");
+        assert_eq!(c.due_at(day, 540, 0).len(), 1, "it has at 09:00");
+        assert_eq!(c.due_at(day, 1200, 0).len(), 1, "and stays due later in the day");
+    }
+
+    /// The "only while running" rule. A daemon started at 14:00 must not
+    /// announce this morning's alarms five hours late.
+    #[test]
+    fn due_at_ignores_occurrences_from_before_the_floor() {
+        let mut c = cal();
+        c.entries.push(repeating(Date::new(2026, 8, 21), Some(540), Repeat::None));
+        let day = Date::new(2026, 8, 21);
+        assert!(c.due_at(day, 14 * 60, 14 * 60).is_empty(), "09:00 is behind the floor");
+        assert_eq!(c.due_at(day, 14 * 60, 0).len(), 1, "with no floor it is due");
+    }
+
+    #[test]
+    fn a_recurring_entry_shows_on_the_month_grid_and_in_the_day_list() {
+        // The month dots, the day list and the alarms all go through
+        // occurs_on, so this is really checking they cannot disagree.
+        let mut c = cal();
+        c.entries.push(repeating(Date::new(2026, 8, 21), Some(540), Repeat::Weekly));
+        assert!(c.has_entries(Date::new(2026, 8, 28)));
+        assert_eq!(c.on(Date::new(2026, 8, 28)).len(), 1);
+        assert!(!c.has_entries(Date::new(2026, 8, 27)));
+    }
+
+    #[test]
+    fn r_cycles_the_repeat_of_the_selected_entry_and_back_to_none() {
+        let mut c = cal();
+        c.add(Date::new(2026, 8, 21), Some(540), "standup");
+        c.focus = Date::new(2026, 8, 21);
+        c.on_key(KeyPress::plain(Key::Tab));
+        assert_eq!(c.mode, Mode::List);
+        for want in [
+            Repeat::Hourly,
+            Repeat::Daily,
+            Repeat::Weekly,
+            Repeat::Monthly,
+            Repeat::None,
+        ] {
+            c.on_key(KeyPress::ch('r'));
+            assert_eq!(c.entries[0].repeat, want);
+        }
+    }
+
+    #[test]
+    fn changing_the_repeat_marks_the_calendar_for_saving() {
+        let mut c = cal();
+        c.add(Date::new(2026, 8, 21), Some(540), "standup");
+        c.focus = Date::new(2026, 8, 21);
+        c.on_key(KeyPress::plain(Key::Tab));
+        c.dirty = false;
+        c.on_key(KeyPress::ch('r'));
+        assert!(c.dirty, "otherwise the change is lost on quit");
+    }
+
+    #[test]
+    fn a_repeat_survives_a_round_trip_through_the_file() {
+        let mut c = cal();
+        c.add(Date::new(2026, 8, 21), Some(540), "standup");
+        c.entries[0].repeat = Repeat::Weekly;
+        c.add(Date::new(2026, 8, 22), None, "rent");
+        c.entries[1].repeat = Repeat::Monthly;
+        let mut b = Calendar::new();
+        assert_eq!(b.load(&c.serialise()), 0, "no unparsable lines");
+        assert_eq!(b.entries[0].repeat, Repeat::Weekly);
+        assert_eq!(b.entries[1].repeat, Repeat::Monthly);
+        assert_eq!(b.entries[1].time, None, "an all-day entry can still repeat");
+    }
+
+    /// The reason the marker rides in the time field rather than beside the
+    /// text: an entry whose text starts with a repeat word must stay text.
+    #[test]
+    fn an_entry_called_daily_standup_is_not_a_daily_entry() {
+        let mut c = cal();
+        c.add(Date::new(2026, 8, 21), Some(540), "daily standup");
+        let mut b = Calendar::new();
+        b.load(&c.serialise());
+        assert_eq!(b.entries[0].repeat, Repeat::None);
+        assert_eq!(b.entries[0].text, "daily standup");
+    }
+
+    #[test]
+    fn an_old_file_without_any_repeat_marker_still_loads() {
+        let mut c = Calendar::new();
+        let unparsed = c.load("2026-08-21 09:00 standup\n2026-08-22 --:-- a whole day\n");
+        assert_eq!(unparsed, 0);
+        assert_eq!(c.entries.len(), 2);
+        assert_eq!(c.entries[0].repeat, Repeat::None);
+    }
+
+    #[test]
+    fn a_line_with_an_unknown_repeat_marker_is_kept_rather_than_dropped() {
+        // Same rule as everywhere else: a line we cannot read goes back out
+        // untouched instead of being deleted on the next save.
+        let mut c = Calendar::new();
+        let unparsed = c.load("2026-08-21 09:00/fortnightly standup\n");
+        assert_eq!(unparsed, 1);
+        assert!(c.serialise().contains("fortnightly"));
     }
 }

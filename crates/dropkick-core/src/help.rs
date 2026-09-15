@@ -136,9 +136,13 @@ const CALENDAR: &[Row] = &[
     row("t", "back to today", &['t']),
     row("a", "add an entry here", &['a']),
     row("tab", "the entries on this day", &[]),
-    row("j k  then d", "in that list: pick, delete", &[]),
+    row("j  k", "in that list: pick one", &[]),
+    row("d", "delete it", &[]),
+    row("r", "repeat: hourly to monthly", &[]),
     row("", "adding asks the text, then a time", &[]),
-    row("", "blank time means all day", &[]),
+    row("", "blank time is all day, never alarms", &[]),
+    row("", "monthly skips months with no such date", &[]),
+    row("", "alarms fire only while dropkick runs", &[]),
 ];
 
 /// With the eyedropper switched off, which is how it ships. See
