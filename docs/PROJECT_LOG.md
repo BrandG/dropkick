@@ -2393,6 +2393,12 @@ the handoff as such.
 rather than doing anything about it. The platform keeps only the "has this
 already been said out loud" bookkeeping. Same split as everywhere else.
 
+**Confirmed firing on hardware by the user.** Worth recording because the poll
+itself is the part no test reaches: it lives in `main.rs`, which has no test
+harness, and it is the first thing this program has ever done without being
+asked. `due_at` being right proves what is due, not that anything wakes up to
+look.
+
 ### Caught by existing tests
 
 The help-column collision test rejected the first draft of the Calendar rows:
