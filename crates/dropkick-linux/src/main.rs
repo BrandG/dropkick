@@ -120,6 +120,12 @@ enum Strategy {
 
 /// What the eyedropper thread sends back: a colour, a cancellation, or why it
 /// could not ask. Named because the raw type is unreadable inline.
+///
+/// Gated with the module it names. Built `--no-default-features` there is no
+/// portal to answer, so the channel, the field that holds its sender and the
+/// handler that reads it all go with it -- the same choice as the two
+/// `start_eyedropper` bodies, rather than keeping a channel nothing can send on.
+#[cfg(feature = "dbus")]
 type Picked = Result<dropkick_linux::dbus::PickResult, String>;
 
 struct Dropkick {
@@ -156,6 +162,7 @@ struct Dropkick {
     /// silently. Comparing the text cannot miss one.
     saved_scratchpad: String,
     /// Where the eyedropper thread posts its answer.
+    #[cfg(feature = "dbus")]
     picked: channel::Sender<Picked>,
     /// True between asking for exclusive focus and actually getting it.
     grabbed_exclusive: bool,
@@ -994,6 +1001,7 @@ fn main() {
     let pool = SlotPool::new((WIDTH * HEIGHT * 4) as usize, &shm).expect("shm pool");
 
     // The eyedropper's answer comes back on its own channel, from a thread.
+    #[cfg(feature = "dbus")]
     let (picked_tx, picked_rx) = channel::channel::<Picked>();
 
     let (tx, rx) = channel::channel::<ipc::Cmd>();
@@ -1016,6 +1024,7 @@ fn main() {
         })
         .expect("insert control channel");
 
+    #[cfg(feature = "dbus")]
     handle
         .insert_source(picked_rx, |ev, _, state: &mut Dropkick| {
             let channel::Event::Msg(result) = ev else { return };
@@ -1082,6 +1091,7 @@ fn main() {
         calendar_token: None,
         scratchpad_token: None,
         saved_scratchpad: String::new(),
+        #[cfg(feature = "dbus")]
         picked: picked_tx,
         grabbed_exclusive: false,
         mods: Mods::default(),

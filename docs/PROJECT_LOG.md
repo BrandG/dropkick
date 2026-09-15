@@ -2321,6 +2321,36 @@ another route.
   on `Kind::Password`, so they stay out of the way. There is a test holding
   that, since `h` sits next to them in the same match.
 
+## --no-default-features DID NOT BUILD — 2026-09-15 (user)
+
+`cargo build --no-default-features` had been failing for some time, and nothing
+noticed because nothing builds that way by habit. Two errors, both the same
+mistake: `Picked` — the eyedropper's reply type — named
+`dropkick_linux::dbus::PickResult` outside any `cfg`, and `dbus` is a feature.
+
+The fix is gating, not a stand-in type. Both were on the table: define a
+non-D-Bus `PickResult` so the channel still compiles, or gate the channel with
+the module it depends on. **Gating won because the alternative keeps a channel
+nothing can ever send on** — with `dbus` off there is no portal, no thread, and
+no reply, so a stand-in enum would exist only to be matched, needing an
+`allow(dead_code)` to say so out loud.
+
+Five sites, one chain: the alias, the `picked` sender field, the channel, the
+`insert_source` handler, and the struct-literal field. That is the same shape
+the two `start_eyedropper` bodies already had — the `not(feature = "dbus")` one
+answers `picking_ended(Some("this build has no D-Bus support"))` on the spot, so
+the reply channel has no part to play in that build at all.
+
+**Nothing changed in the default build**, which is the point: this was a
+build-graph bug, not a behaviour one, and the eyedropper stays off behind
+`ColorTool::new` either way. Verified both ways round — both builds, both
+`--all-targets`, clippy clean under each feature set, and 433 tests.
+
+The real lesson is the one about `deny.toml`, again: **a configuration nobody
+builds is a configuration that does not work.** The `dbus` feature exists so the
+no-networking claim can be checked with the D-Bus code removed entirely, and it
+had quietly stopped being able to do that.
+
 ## NEXT
 
 The interaction grammar is settled, so: the tab bar plus two tools, far enough

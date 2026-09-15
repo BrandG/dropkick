@@ -14,7 +14,7 @@ maximum forever. `README.md` is the user-facing version.
 One user (Brand), on Pop!_OS 24.04 / COSMIC / Wayland. Windows is a stated
 future target; `dropkick-core` is kept free of anything OS-specific for it.
 
-## State as of 2026-08-25
+## State as of 2026-09-15
 
 **All seven tools built.** 433 tests, clippy clean at zero warnings.
 
@@ -269,29 +269,6 @@ One advisory is currently accepted (`ttf-parser`, unmaintained, via `fontdue`).
   taking one. Real work: the capture protocol, a full-screen picker surface, and
   cursor handling. Turning the existing portal path back on is one field
   (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
-- **Repeating calendar entries, and alarms for them** — deliberately left out.
-  An entry with a time is inert; nothing notifies. The Timer already knows how
-  to raise a notification, so wiring one to a calendar entry is small; recurrence
-  is not, and should not be started casually.
-- **Clickable notifications, and encrypted pinned clipboard entries** — both
-  were blocked on D-Bus signal support, which the eyedropper has now added.
-  `Bus::pick_color` is the worked example: install the match rule *before* the
-  call, then read until the signal arrives.
-- **The eyedropper, for real** (`alt+u`) — deferred to a later point release,
-  not abandoned. The portal route is written and switched off because COSMIC
-  refuses `PickColor`; see the log for the traced exchange. The route that would
-  actually work here is native: cosmic-comp exports
-  `ext_image_copy_capture_manager_v1`, and Dropkick already speaks Wayland, so
-  capturing the screen and reading the pixel under the cursor needs no D-Bus and
-  no dependency — the same call as hand-rolling the D-Bus client rather than
-  taking one. Real work: the capture protocol, a full-screen picker surface, and
-  cursor handling. Turning the existing portal path back on is one field
-  (`ColorTool::new`), and is worth retrying whenever COSMIC updates.
-- **`e` in the Scratchpad, if anyone misses it** — `w`, `b` and `O` are built;
-  `e` (end of word) is the obvious remaining vi motion and was not asked for.
-  It goes in `motion_for` like the others, and its operator span is
-  *inclusive*, unlike `w`'s — which is the whole subtlety, so read
-  `operator_span` before starting.
 - **seccomp filter** denying `AF_INET`/`AF_INET6` — planned, would make the
   no-networking claim enforced rather than merely audited.
 
