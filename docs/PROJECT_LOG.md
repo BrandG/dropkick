@@ -7,7 +7,7 @@ metadata:
   originSessionId: ee9b8de3-8ea4-449e-ab3c-341b0af5b5a2
 ---
 
-**Dropkick** is a new project (started 2026-08-13) at `/home/brandg/Documents/Dropkick`:
+**Dropkick** is a new project (started 2026-08-13) at `/home/brandg/Documents/Projects/Dropkick`:
 a small desktop utility panel — calculator, scratchpad, clipboard history,
 calendar, unit conversion — summoned and dismissed by a global hotkey. It is not
 a launcher clone; the distinguishing claims are architectural rather than
